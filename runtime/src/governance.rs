@@ -39,7 +39,7 @@ pub trait Trait: balances::Trait + timestamp::Trait + system::Trait {
 
 decl_event!(
 	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-        //created, voted, withdrawn
+        //created, voted, withdrawn, finalized
         Created(AccountId, u64),
         Voted(AccountId, u64, Ballot),
 	}
@@ -51,10 +51,14 @@ decl_storage! {
     // -VoteCreator: map u64 => Option<T::AccountId>;
     // VoteByCreator: map T::AccountId => <Vec: u64>;
     trait Store for Module<T: Trait> as GovernanceModule {
+        // All votes
         AllVoteCount get(all_vote_count): u64;
-        VotesByIndex: map u64 => Vote<T::AccountId, T::Moment>;
+        VotesByIndex get(index_of): map u64 => Vote<T::AccountId, T::Moment>;
+
+        // Creator
         VoteCreator get(creator_of): map u64 => Option<T::AccountId>;
         CreatedVoteCount get(created_by): map T::AccountId => u64; // increment everytime created
+
         // VoteByCreatorArray get(created_by): map T::AccountId => <Vec: u64>;
         VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::Moment>;
     }
@@ -66,7 +70,6 @@ decl_module! {
 
         fn deposit_event() = default;
         // Creator Modules
-        // create_vote_majority_rule(Title, Option(comma separated), Expiretime)
         fn create_vote(origin) -> Result {
             let sender = ensure_signed(origin)?;
             let new_vote_num = <AllVoteCount>::get().checked_add(1)
@@ -88,7 +91,7 @@ decl_module! {
             Ok(())
         }
 
-        //TODO: add voter modules: {vote}
+        // Voter modules
         fn cast_ballot(origin, reference_index: u64, ballot: Ballot) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
@@ -97,12 +100,15 @@ decl_module! {
             // push voter id to aye or nay
             match ballot {
                 Ballot::Aye => {
-                    <VotesByIndex<T>>::get(reference_index).aye.push(sender.clone());
-                    Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
+                    // create a new updated Vote, remove the previous Vote, insert the new Vote
+                    let mut new_vote = <VotesByIndex<T>>::get(reference_index);
+                    new_vote.aye.push(sender.clone());
+                    Self::update_vote(reference_index, new_vote, sender, ballot)?;
                 }
                 Ballot::Nay => {
-                    <VotesByIndex<T>>::get(reference_index).nay.push(sender.clone());
-                    Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
+                    let mut new_vote = <VotesByIndex<T>>::get(reference_index);
+                    new_vote.nay.push(sender.clone());
+                    Self::update_vote(reference_index, new_vote, sender, ballot)?;
                 }
             }
             Ok(())
@@ -122,6 +128,17 @@ impl<T: Trait> Module<T> {
 
         Self::deposit_event(RawEvent::Created(sender, new_vote_num));
 
+        Ok(())
+    }
+
+    // updated after ballot being casted
+    fn update_vote(reference_index: u64, new_vote: Vote<T::AccountId, T::Moment>, sender: T::AccountId, ballot: Ballot) -> Result {
+        <VotesByIndex<T>>::remove(&reference_index);
+        <VotesByIndex<T>>::insert(&reference_index, &new_vote);
+        <VoteByCreatorArray<T>>::remove((&sender, &reference_index));
+        <VoteByCreatorArray<T>>::insert((&sender, reference_index), new_vote);
+        
+        Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
         Ok(())
     }
 }
