@@ -15,15 +15,8 @@ pub struct Vote<AccountId, Timestamp> {
     vote_type: u8,
     aye: Vec<AccountId>,
     nay: Vec<AccountId>, //or :map u64 -> AccountId   vec.len().push()
-    // enum Vote_type　{
-    //     Majority Rule, // Majority Rule(expire, threshold: {adaptive quorum})
-    //     Stake Locking, // Stake Locking 
-    //     Quadratic Voting
-    // }
-
     // expireblock: 
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -31,6 +24,8 @@ pub enum Ballot {
     Aye,
     Nay,
 }
+
+pub type ReferenceIndex = u64;
 
 // import Trait from balances, timestamp, event
 pub trait Trait: balances::Trait + timestamp::Trait + system::Trait {
@@ -61,6 +56,8 @@ decl_storage! {
 
         // VoteByCreatorArray get(created_by): map T::AccountId => <Vec: u64>;
         VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::Moment>;
+
+        VoteResults: map u64 => Vec<u64>;
     }
     // VoteByVoter: map T::AccountId => <Vec: u64>;
 }
@@ -81,21 +78,22 @@ decl_module! {
                 id: new_vote_num,
                 vote_type: 0,
                 creator: sender.clone(),
-                when: <timestamp::Module<T>>::get(),
+                when: <timestamp::Module<T>>::now(),
                 aye: Vec::new(), //0　!vec[]
                 nay: Vec::new() //::new(),
             };
 
             Self::mint_vote(sender, new_vote, vote_count_by_sender, new_vote_num)?;
-        
+            
             Ok(())
         }
 
         // Voter modules
-        fn cast_ballot(origin, reference_index: u64, ballot: Ballot) -> Result {
+        fn cast_ballot(origin, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             // ensure the voter hasnt voted in the vote or change it to the other
+            // ensure the vote hasnt ended yet
             
             // push voter id to aye or nay
             match ballot {
@@ -111,6 +109,12 @@ decl_module! {
                     Self::update_vote(reference_index, new_vote, sender, ballot)?;
                 }
             }
+            Ok(())
+        }
+
+        fn conclude_vote(origin, reference_index: ReferenceIndex) -> Result {
+            let _sender = ensure_signed(origin)?;
+            Self::tally(reference_index)?;
             Ok(())
         }
     }
@@ -132,7 +136,7 @@ impl<T: Trait> Module<T> {
     }
 
     // updated after ballot being casted
-    fn update_vote(reference_index: u64, new_vote: Vote<T::AccountId, T::Moment>, sender: T::AccountId, ballot: Ballot) -> Result {
+    fn update_vote(reference_index: ReferenceIndex, new_vote: Vote<T::AccountId, T::Moment>, sender: T::AccountId, ballot: Ballot) -> Result {
         <VotesByIndex<T>>::remove(&reference_index);
         <VotesByIndex<T>>::insert(&reference_index, &new_vote);
         <VoteByCreatorArray<T>>::remove((&sender, &reference_index));
@@ -141,6 +145,20 @@ impl<T: Trait> Module<T> {
         Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
         Ok(())
     }
+
+    // only called after the vote expired
+    fn tally(reference_index: u64) -> Result {
+        // ensure: vote has ended(expiringblock < currentblocknumber), called by the module?
+        let vote = <VotesByIndex<T>>::get(&reference_index);
+        let aye_count = vote.aye.len() as u64;
+        let nay_count = vote.nay.len() as u64;
+        let mut result:Vec<u64> = Vec::new();
+        result.push(aye_count);
+        result.push(nay_count);
+        <VoteResults>::insert(reference_index, result);
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]
