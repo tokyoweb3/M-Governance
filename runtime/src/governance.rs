@@ -2,6 +2,7 @@ use support::{decl_module, decl_storage, decl_event, dispatch::Result, ensure };
 use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
+use sr_primitives::traits::{CheckedAdd };
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
 // Voter: {accountId, votedVotes:<Vec: u64>, timeLastVoted: timestamp, balance: balances}
@@ -12,6 +13,7 @@ pub struct Vote<AccountId, Timestamp> {
     id: u64,
     creator: AccountId,
     when: Timestamp, //T::Moment
+    vote_ends: Timestamp,
     vote_type: u8,
     aye: Vec<AccountId>,
     nay: Vec<AccountId>, //or :map u64 -> AccountId   vec.len().push()
@@ -73,14 +75,19 @@ decl_module! {
                 .ok_or("Overflow adding vote count")?;
             let vote_count_by_sender = <CreatedVoteCount<T>>::get(sender.clone()).checked_add(1)
                 .ok_or("Overflow adding vote count to the sender")?;
+            let exp_length = 12000.into(); // 2 mins for test
+            let now = <timestamp::Module<T>>::now();
+            // check if resolved if now > vote_exp
+            let vote_exp = now.checked_add(&exp_length).ok_or("Overflow when setting application expiry.")?;
 
             let new_vote = Vote{
                 id: new_vote_num,
                 vote_type: 0,
                 creator: sender.clone(),
-                when: <timestamp::Module<T>>::now(),
-                aye: Vec::new(), //0　!vec[]
-                nay: Vec::new() //::new(),
+                when: now,
+                vote_ends: vote_exp,
+                aye: Vec::new(),
+                nay: Vec::new()
             };
 
             Self::mint_vote(sender, new_vote, vote_count_by_sender, new_vote_num)?;
@@ -91,11 +98,14 @@ decl_module! {
         // Voter modules
         fn cast_ballot(origin, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
             let sender = ensure_signed(origin)?;
+            let vote = <VotesByIndex<T>>::get(&reference_index);
+            let now = <timestamp::Module<T>>::now();
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
+            ensure!(vote.vote_ends > now, "This vote has already been expired.");
             // ensure the voter hasnt voted in the vote or change it to the other
-            // ensure the vote hasnt ended yet
             
             // push voter id to aye or nay
+            // TODO: decode?
             match ballot {
                 Ballot::Aye => {
                     // create a new updated Vote, remove the previous Vote, insert the new Vote
@@ -114,6 +124,10 @@ decl_module! {
 
         fn conclude_vote(origin, reference_index: ReferenceIndex) -> Result {
             let _sender = ensure_signed(origin)?;
+            // ensure the vote is expired before tallying
+            let now = <timestamp::Module<T>>::now();
+            let vote = <VotesByIndex<T>>::get(reference_index);
+            ensure!(now > vote.vote_ends, "This vote hasn't been expired yet.");
             Self::tally(reference_index)?;
             Ok(())
         }
@@ -158,7 +172,6 @@ impl<T: Trait> Module<T> {
         <VoteResults>::insert(reference_index, result);
         Ok(())
     }
-
 }
 
 #[cfg(test)]
