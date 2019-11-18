@@ -14,6 +14,7 @@ pub struct Vote<AccountId, Timestamp> {
     creator: AccountId,
     when: Timestamp, //T::Moment
     vote_ends: Timestamp,
+    concluded: bool,
     vote_type: u8,
     aye: Vec<AccountId>,
     nay: Vec<AccountId>, //or :map u64 -> AccountId   vec.len().push()
@@ -27,7 +28,7 @@ pub enum Ballot {
     Nay,
 }
 
-pub type ReferenceIndex = u64;
+// pub type ReferenceIndex = u64;
 
 // import Trait from balances, timestamp, event
 pub trait Trait: balances::Trait + timestamp::Trait + system::Trait {
@@ -68,15 +69,18 @@ decl_module! {
     pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 
         fn deposit_event() = default;
+
         // Creator Modules
+        // Create a new vote
+        // TODO: Takes expiring time, title, voting_type
         fn create_vote(origin) -> Result {
             let sender = ensure_signed(origin)?;
             let new_vote_num = <AllVoteCount>::get().checked_add(1)
                 .ok_or("Overflow adding vote count")?;
             let vote_count_by_sender = <CreatedVoteCount<T>>::get(sender.clone()).checked_add(1)
                 .ok_or("Overflow adding vote count to the sender")?;
-            let exp_length = 12000.into(); // 2 mins for test
-            let now = <timestamp::Module<T>>::now();
+            let exp_length = 60000.into(); // 30sec for test
+            let now = <timestamp::Module<T>>::get();
             // check if resolved if now > vote_exp
             let vote_exp = now.checked_add(&exp_length).ok_or("Overflow when setting application expiry.")?;
 
@@ -86,6 +90,7 @@ decl_module! {
                 creator: sender.clone(),
                 when: now,
                 vote_ends: vote_exp,
+                concluded: false,
                 aye: Vec::new(),
                 nay: Vec::new()
             };
@@ -96,25 +101,42 @@ decl_module! {
         }
 
         // Voter modules
-        fn cast_ballot(origin, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
+        // cast_ballot checks
+            // a. the vote exists
+            // b. vote hasnt expired
+            // c. the voter hasnt voted yet in the same option. If voted in different option, change the vote.
+        fn cast_ballot(origin, reference_index: u64, ballot: Ballot) -> Result {
             let sender = ensure_signed(origin)?;
-            let vote = <VotesByIndex<T>>::get(&reference_index);
+            let mut vote = <VotesByIndex<T>>::get(&reference_index);
             let now = <timestamp::Module<T>>::now();
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
+            ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             // ensure the voter hasnt voted in the vote or change it to the other
-            
-            // push voter id to aye or nay
-            // TODO: decode?
+
+            // keep track of voter's id in aye or nay vector in Vote
+            // Voter can change his vote b/w aye and nay
+            // Voter cannot vote twice
             match ballot {
                 Ballot::Aye => {
+                    ensure!(!vote.aye.contains(&sender), "You have already voted aye.");
                     // create a new updated Vote, remove the previous Vote, insert the new Vote
                     let mut new_vote = <VotesByIndex<T>>::get(reference_index);
+                    // if sender is in other option, remove the item
+                    if vote.nay.contains(&sender) {
+                        let i = vote.nay.iter().position(|x| x == &sender).unwrap() as usize;
+                        vote.nay.remove(i);
+                    } 
                     new_vote.aye.push(sender.clone());
                     Self::update_vote(reference_index, new_vote, sender, ballot)?;
                 }
                 Ballot::Nay => {
+                    ensure!(!vote.nay.contains(&sender), "You have already voted nay.");
                     let mut new_vote = <VotesByIndex<T>>::get(reference_index);
+                    if vote.aye.contains(&sender) {
+                        let i = vote.aye.iter().position(|x| x == &sender).unwrap() as usize;
+                        vote.aye.remove(i);
+                    } 
                     new_vote.nay.push(sender.clone());
                     Self::update_vote(reference_index, new_vote, sender, ballot)?;
                 }
@@ -122,11 +144,15 @@ decl_module! {
             Ok(())
         }
 
-        fn conclude_vote(origin, reference_index: ReferenceIndex) -> Result {
+        // conclude a vote given expired
+        // anyone can call this function, and Vote.concluded returns true
+        pub fn conclude_vote(origin, reference_index: u64) -> Result {
             let _sender = ensure_signed(origin)?;
-            // ensure the vote is expired before tallying
-            let now = <timestamp::Module<T>>::now();
             let vote = <VotesByIndex<T>>::get(reference_index);
+            // ensure the vote is expired before tallying
+            ensure!(vote.concluded == false, "This vote has already concluded.");
+            let now = <timestamp::Module<T>>::now();
+            // double check
             ensure!(now > vote.vote_ends, "This vote hasn't been expired yet.");
             Self::tally(reference_index)?;
             Ok(())
@@ -150,7 +176,7 @@ impl<T: Trait> Module<T> {
     }
 
     // updated after ballot being casted
-    fn update_vote(reference_index: ReferenceIndex, new_vote: Vote<T::AccountId, T::Moment>, sender: T::AccountId, ballot: Ballot) -> Result {
+    fn update_vote(reference_index: u64, new_vote: Vote<T::AccountId, T::Moment>, sender: T::AccountId, ballot: Ballot) -> Result {
         <VotesByIndex<T>>::remove(&reference_index);
         <VotesByIndex<T>>::insert(&reference_index, &new_vote);
         <VoteByCreatorArray<T>>::remove((&sender, &reference_index));
