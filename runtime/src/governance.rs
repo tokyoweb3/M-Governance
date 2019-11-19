@@ -2,7 +2,7 @@ use support::{decl_module, decl_storage, decl_event, dispatch::Result, ensure };
 use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
-use sr_primitives::traits::{CheckedAdd };
+use sr_primitives::traits::{CheckedAdd, Hash};
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
 // Voter: {accountId, votedVotes:<Vec: u64>, timeLastVoted: timestamp, balance: balances}
@@ -40,6 +40,7 @@ decl_event!(
         //created, voted, withdrawn, finalized
         Created(AccountId, u64),
         Voted(AccountId, u64, Ballot),
+        Concluded(u64),
 	}
 );
 
@@ -61,8 +62,8 @@ decl_storage! {
         VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::Moment>;
 
         VoteResults: map u64 => Vec<u64>;
+        VoteIndexHash get(index_hash): map u64 => T::Hash;
     }
-    // VoteByVoter: map T::AccountId => <Vec: u64>;
 }
 
 decl_module! {
@@ -72,9 +73,11 @@ decl_module! {
 
         // Creator Modules
         // Create a new vote
-        // TODO: Takes expiring time, title, voting_type
-        fn create_vote(origin) -> Result {
+        // TODO: Takes expiring time, title as data: Vec, voting_type
+        fn create_vote(origin, data: Vec<u8>) -> Result {
             let sender = ensure_signed(origin)?;
+            ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
+
             let new_vote_num = <AllVoteCount>::get().checked_add(1)
                 .ok_or("Overflow adding vote count")?;
             let vote_count_by_sender = <CreatedVoteCount<T>>::get(sender.clone()).checked_add(1)
@@ -83,7 +86,7 @@ decl_module! {
             let now = <timestamp::Module<T>>::get();
             // check if resolved if now > vote_exp
             let vote_exp = now.checked_add(&exp_length).ok_or("Overflow when setting application expiry.")?;
-
+            let hashed = <T as system::Trait>::Hashing::hash(&data);
             let new_vote = Vote{
                 id: new_vote_num,
                 vote_type: 0,
@@ -96,7 +99,7 @@ decl_module! {
             };
 
             Self::mint_vote(sender, new_vote, vote_count_by_sender, new_vote_num)?;
-            
+            <VoteIndexHash<T>>::insert(new_vote_num, hashed);
             Ok(())
         }
 
@@ -112,8 +115,8 @@ decl_module! {
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
-            // ensure the voter hasnt voted in the vote or change it to the other
 
+            // TODO: Clean up with ::mutate instead of update func
             // keep track of voter's id in aye or nay vector in Vote
             // Voter can change his vote b/w aye and nay
             // Voter cannot vote twice
@@ -122,13 +125,13 @@ decl_module! {
                     ensure!(!vote.aye.contains(&sender), "You have already voted aye.");
                     // create a new updated Vote, remove the previous Vote, insert the new Vote
                     let mut new_vote = <VotesByIndex<T>>::get(reference_index);
-                    // if sender is in other option, remove the item
+                    // if sender has voted for the other option, remove from the array
                     if vote.nay.contains(&sender) {
                         let i = vote.nay.iter().position(|x| x == &sender).unwrap() as usize;
                         vote.nay.remove(i);
                     } 
                     new_vote.aye.push(sender.clone());
-                    Self::update_vote(reference_index, new_vote, sender, ballot)?;
+                    Self::update_vote(reference_index, new_vote)?;
                 }
                 Ballot::Nay => {
                     ensure!(!vote.nay.contains(&sender), "You have already voted nay.");
@@ -138,7 +141,8 @@ decl_module! {
                         vote.aye.remove(i);
                     } 
                     new_vote.nay.push(sender.clone());
-                    Self::update_vote(reference_index, new_vote, sender, ballot)?;
+                    Self::update_vote(reference_index, new_vote)?;
+                    Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
                 }
             }
             Ok(())
@@ -146,15 +150,18 @@ decl_module! {
 
         // conclude a vote given expired
         // anyone can call this function, and Vote.concluded returns true
-        pub fn conclude_vote(origin, reference_index: u64) -> Result {
-            let _sender = ensure_signed(origin)?;
+        pub fn conclude_vote(_origin, reference_index: u64) -> Result {
             let vote = <VotesByIndex<T>>::get(reference_index);
-            // ensure the vote is expired before tallying
+            // ensure the vote is concluded before tallying
             ensure!(vote.concluded == false, "This vote has already concluded.");
             let now = <timestamp::Module<T>>::now();
             // double check
             ensure!(now > vote.vote_ends, "This vote hasn't been expired yet.");
             Self::tally(reference_index)?;
+            // For some reason Storage is not reflected, but works.
+            <VotesByIndex<T>>::mutate(reference_index, |vote| vote.concluded = true);
+            <VoteByCreatorArray<T>>::mutate((vote.creator, reference_index), |vote| vote.concluded = true);
+            Self::deposit_event(RawEvent::Concluded(reference_index));
             Ok(())
         }
     }
@@ -167,8 +174,8 @@ impl<T: Trait> Module<T> {
         <VotesByIndex<T>>::insert(new_vote_num.clone(), &new_vote);
         <VoteCreator<T>>::insert(new_vote_num.clone(), sender.clone());
         <CreatedVoteCount<T>>::insert(sender.clone(), vote_count_by_sender);
-        <VoteByCreatorArray<T>>::insert((sender.clone(), vote_count_by_sender), new_vote);
-        <AllVoteCount>::put(new_vote_num);
+        <AllVoteCount>::put(new_vote_num.clone());
+        <VoteByCreatorArray<T>>::insert((sender.clone(), new_vote_num), new_vote);
 
         Self::deposit_event(RawEvent::Created(sender, new_vote_num));
 
@@ -176,13 +183,12 @@ impl<T: Trait> Module<T> {
     }
 
     // updated after ballot being casted
-    fn update_vote(reference_index: u64, new_vote: Vote<T::AccountId, T::Moment>, sender: T::AccountId, ballot: Ballot) -> Result {
+    fn update_vote(reference_index: u64, new_vote: Vote<T::AccountId, T::Moment>) -> Result {
         <VotesByIndex<T>>::remove(&reference_index);
         <VotesByIndex<T>>::insert(&reference_index, &new_vote);
-        <VoteByCreatorArray<T>>::remove((&sender, &reference_index));
-        <VoteByCreatorArray<T>>::insert((&sender, reference_index), new_vote);
+        <VoteByCreatorArray<T>>::remove((<VotesByIndex<T>>::get(reference_index).creator, &reference_index));
+        <VoteByCreatorArray<T>>::insert((<VotesByIndex<T>>::get(reference_index).creator, &reference_index), &new_vote);
         
-        Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
         Ok(())
     }
 
