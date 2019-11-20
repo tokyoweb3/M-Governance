@@ -1,5 +1,5 @@
 use support::{
-    decl_module, decl_storage, decl_event, dispatch::Result, ensure, print, Parameter,
+    decl_module, decl_storage, decl_event, dispatch::Result, ensure, print,
     traits::{
         LockableCurrency, WithdrawReason, WithdrawReasons, LockIdentifier, Get, Currency,
     }
@@ -7,9 +7,7 @@ use support::{
 use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
-use sr_primitives::traits::{Hash, CheckedAdd, Member};
-
-const EXAMPLE_ID: LockIdentifier = *b"lockvote";
+use sr_primitives::traits::{Hash, CheckedAdd};
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
 // Voter: {accountId, votedVotes:<Vec: u64>, timeLastVoted: timestamp, balance: balances}
@@ -126,23 +124,21 @@ decl_module! {
             let sender = ensure_signed(origin)?;
             let vote = Self::votes(&reference_index);
             let now = <timestamp::Module<T>>::now();
-            
-
+            let lock_id: LockIdentifier = Self::lock_id(reference_index);
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
             // lock function
-            <LockBalance<T>>::mutate((reference_index, &sender), |lockinfo| lockinfo.deposit += deposit);
+            <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| lockinfo.deposit += deposit);
             T::Currency::set_lock(
-                EXAMPLE_ID,
+                lock_id,
                 &sender,
                 deposit,
-                T::LockPeriod::get(),
+                T::LockPeriod::get() + duration,
                 WithdrawReasons::except(WithdrawReason::TransactionPayment),
             );
-            // Balance_of(sender).checked_sub(deposit).ok_or("Underflow");
-
+            Self::cast_ballot_f(sender, reference_index, ballot)?;
             Ok(())
         }
         fn withdraw(origin, reference_index: ReferenceIndex) -> Result {
@@ -224,10 +220,56 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-    fn lock(){
-
+    fn lock_id(reference_index: ReferenceIndex) -> [u8; 8] {
+        let mut lock_id: [u8; 8] = *b"        ";
+        lock_id[0] = reference_index as u8;
+        lock_id
     }
 
+    // keep track of accounts in array by Aye/Nay in <VotedAccounts<T>>
+    // TODO: lockvote_tally should check <LockBalance> for accuracy
+    fn cast_ballot_f(sender: T::AccountId, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
+        let vote = <VotesByIndex<T>>::get(&reference_index);
+        let now = <timestamp::Module<T>>::now();
+        ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
+        ensure!(vote.creator != sender, "You cannot vote your own vote.");
+        ensure!(vote.vote_ends > now, "This vote has already been expired.");
+        ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
+        let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
+        let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
+        // keep track of voter's id in aye or nay vector in Vote
+        // Voter can change his vote b/w aye and nay
+        // Voter cannot vote twice
+        match ballot {
+            Ballot::Aye => {
+                ensure!(!accounts_aye.contains(&sender), "You have already voted aye.");
+                // if sender has voted for the other option, remove from the array
+                if accounts_nay.contains(&sender) {
+                    let i = accounts_nay.iter().position(|x| x == &sender).unwrap() as usize;
+                    accounts_nay.remove(i);
+                } 
+                accounts_aye.push(sender.clone());
+                // <VotedAccounts<T>>::mutate((reference_index, 0), |vec| {
+                //     *vec = accounts_aye
+                // });
+                <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
+                print("Ballot casted Aye!");
+            }
+            Ballot::Nay => {
+                ensure!(!accounts_nay.contains(&sender), "You have already voted nay.");
+                if accounts_aye.contains(&sender) {
+                    let i = accounts_aye.iter().position(|x| x == &sender).unwrap() as usize;
+                    accounts_aye.remove(i);
+                } 
+                accounts_nay.push(sender.clone());
+                // <VotedAccounts<T>>::mutate((reference_index, 1), |vec| *vec = accounts_nay);
+                <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
+                print("Ballot casted Nay!");
+            }
+        }
+        Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
+        Ok(())
+    }
     fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::Moment>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
         ensure!(!<VotesByIndex<T>>::exists(&new_vote_num), "Vote already exists");
 
@@ -239,16 +281,6 @@ impl<T: Trait> Module<T> {
 
         Self::deposit_event(RawEvent::Created(sender, new_vote_num));
         print("Vote created!");
-        Ok(())
-    }
-
-    // updated after ballot being casted
-    fn update_vote(reference_index: u64, new_vote: Vote<T::AccountId, T::Moment>) -> Result {
-        <VotesByIndex<T>>::remove(&reference_index);
-        <VotesByIndex<T>>::insert(&reference_index, &new_vote);
-        <VoteByCreatorArray<T>>::remove((<VotesByIndex<T>>::get(reference_index).creator, &reference_index));
-        <VoteByCreatorArray<T>>::insert((<VotesByIndex<T>>::get(reference_index).creator, &reference_index), &new_vote);
-        
         Ok(())
     }
 
