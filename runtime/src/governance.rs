@@ -34,9 +34,10 @@ pub enum Ballot {
 
 #[derive(PartialEq, Encode, Decode, Default)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct LockInfo<Balance, Timestamp> {
+pub struct LockInfo<Balance, BlockNumber> {
     deposit: Balance,
-    duration: Timestamp,
+    duration: BlockNumber,
+    until: BlockNumber
 }
 
 pub type ReferenceIndex = u64;
@@ -55,6 +56,7 @@ decl_event!(
         Created(AccountId, u64),
         Voted(AccountId, u64, Ballot),
         Concluded(u64),
+        Withdrew(AccountId, ReferenceIndex),
 	}
 );
 
@@ -81,7 +83,7 @@ decl_storage! {
         // VotedAccounts:[aye:[AccountId], nay:[AccountId],....]
         VotedAccounts: map (ReferenceIndex, u8) => Vec<T::AccountId>;
 
-        LockBalance: map (ReferenceIndex, T::AccountId) => LockInfo<BalanceOf<T>, T::Moment>;
+        LockBalance: map (ReferenceIndex, T::AccountId) => LockInfo<BalanceOf<T>, T::BlockNumber>;
         LockCount get(lock_count): u64;
     }
 }
@@ -124,29 +126,55 @@ decl_module! {
             let sender = ensure_signed(origin)?;
             let vote = Self::votes(&reference_index);
             let now = <timestamp::Module<T>>::now();
-            let lock_id: LockIdentifier = Self::lock_id(reference_index);
+            let lock_id: LockIdentifier = reference_index.to_be_bytes();
+            let current_blocknumber = <system::Module<T>>::block_number();
+            // duration should be at least vote_end
+            // deposit should be smaller than freebalance
+            ensure!(T::Currency::free_balance(&sender) > deposit, "You cannot lock more than your free balance!");
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
             // lock function
-            <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| lockinfo.deposit += deposit);
+            <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| {
+                lockinfo.deposit += deposit;
+                lockinfo.duration += duration;
+                lockinfo.until = current_blocknumber + duration;
+            });
             T::Currency::set_lock(
                 lock_id,
                 &sender,
                 deposit,
-                T::LockPeriod::get() + duration,
+                T::LockPeriod::get(),   // use withdraw function
                 WithdrawReasons::except(WithdrawReason::TransactionPayment),
             );
             Self::cast_ballot_f(sender, reference_index, ballot)?;
             Ok(())
         }
+
+        // Withdraws locked token
+        // Takes reference_index and sender accountId
+        // checks:
+            // a: if the vote exists and type is 1
+            // b: the vote has concluded. Cannot tally if withdrawn before conclusion 
+            // b: ensure sender has locked the vote
+            // c: ensure the lock period is over
         fn withdraw(origin, reference_index: ReferenceIndex) -> Result {
-            // ensure!(vote has ended)
-            // ensure!(sender has voted the vote)
-            // let deposit = <LockBalance<T>>::get((reference_index, sender));
-            // Balance_of(sender).checked_add(deposit);
-            // <LockBalance<T>>::remove((reference_index, sender));
+            let sender = ensure_signed(origin)?;
+            let vote = Self::votes(reference_index);
+            ensure!(vote.vote_type == 1, "This must be lockvote: vote_type: 1!");
+            ensure!(vote.concluded == true, "You have to wait at least until the vote concludes!");
+            ensure!(<LockBalance<T>>::exists((&reference_index, &sender)), "You need to participate lockvoting to call this function!");
+            let lock_info = <LockBalance<T>>::get((&reference_index, &sender));
+            ensure!(lock_info.until < <system::Module<T>>::block_number(), "You need to wait until the lock period is over!");
+            T::Currency::remove_lock(
+                reference_index.to_be_bytes(),
+                &sender
+            );
+            <LockBalance<T>>::remove((&reference_index, &sender));
+            print("Locked token is withdrawn!");
+            Self::deposit_event(RawEvent::Withdrew(sender, reference_index));
+    
             Ok(())
         }
         // Voter modules
@@ -164,7 +192,6 @@ decl_module! {
             ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
             let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
             let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
-            // TODO: Clean up with ::mutate instead of update func
             // keep track of voter's id in aye or nay vector in Vote
             // Voter can change his vote b/w aye and nay
             // Voter cannot vote twice
@@ -177,9 +204,6 @@ decl_module! {
                         accounts_nay.remove(i);
                     } 
                     accounts_aye.push(sender.clone());
-                    // <VotedAccounts<T>>::mutate((reference_index, 0), |vec| {
-                    //     *vec = accounts_aye
-                    // });
                     <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
                     print("Ballot casted Aye!");
                 }
@@ -220,21 +244,9 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-    fn lock_id(reference_index: ReferenceIndex) -> [u8; 8] {
-        let mut lock_id: [u8; 8] = *b"        ";
-        lock_id[0] = reference_index as u8;
-        lock_id
-    }
-
     // keep track of accounts in array by Aye/Nay in <VotedAccounts<T>>
     // TODO: lockvote_tally should check <LockBalance> for accuracy
     fn cast_ballot_f(sender: T::AccountId, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
-        let vote = <VotesByIndex<T>>::get(&reference_index);
-        let now = <timestamp::Module<T>>::now();
-        ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
-        ensure!(vote.creator != sender, "You cannot vote your own vote.");
-        ensure!(vote.vote_ends > now, "This vote has already been expired.");
-        ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
         let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
         let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
         // keep track of voter's id in aye or nay vector in Vote
@@ -249,9 +261,6 @@ impl<T: Trait> Module<T> {
                     accounts_nay.remove(i);
                 } 
                 accounts_aye.push(sender.clone());
-                // <VotedAccounts<T>>::mutate((reference_index, 0), |vec| {
-                //     *vec = accounts_aye
-                // });
                 <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
                 print("Ballot casted Aye!");
             }
@@ -262,7 +271,6 @@ impl<T: Trait> Module<T> {
                     accounts_aye.remove(i);
                 } 
                 accounts_nay.push(sender.clone());
-                // <VotedAccounts<T>>::mutate((reference_index, 1), |vec| *vec = accounts_nay);
                 <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
                 print("Ballot casted Nay!");
             }
