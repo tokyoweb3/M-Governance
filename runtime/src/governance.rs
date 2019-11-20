@@ -1,8 +1,15 @@
-use support::{decl_module, decl_storage, decl_event, dispatch::Result, ensure, print };
+use support::{
+    decl_module, decl_storage, decl_event, dispatch::Result, ensure, print, Parameter,
+    traits::{
+        LockableCurrency, WithdrawReason, WithdrawReasons, LockIdentifier, Get, Currency,
+    }
+};
 use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
-use sr_primitives::traits::{CheckedAdd, Hash};
+use sr_primitives::traits::{Hash, CheckedAdd, Member};
+
+const EXAMPLE_ID: LockIdentifier = *b"lockvote";
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
 // Voter: {accountId, votedVotes:<Vec: u64>, timeLastVoted: timestamp, balance: balances}
@@ -27,11 +34,21 @@ pub enum Ballot {
     Nay,
 }
 
+#[derive(PartialEq, Encode, Decode, Default)]
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct LockInfo<Balance, Timestamp> {
+    deposit: Balance,
+    duration: Timestamp,
+}
+
 pub type ReferenceIndex = u64;
+pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 
 // import Trait from balances, timestamp, event
 pub trait Trait: balances::Trait + timestamp::Trait + system::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+    type Currency: LockableCurrency<Self::AccountId, Moment=Self::BlockNumber>;
+    type LockPeriod: Get<Self::BlockNumber>;
 }
 
 decl_event!(
@@ -51,7 +68,7 @@ decl_storage! {
     trait Store for Module<T: Trait> as GovernanceModule {
         // All votes
         AllVoteCount get(all_vote_count): u64;
-        VotesByIndex get(index_of): map u64 => Vote<T::AccountId, T::Moment>;
+        VotesByIndex get(votes): map u64 => Vote<T::AccountId, T::Moment>;
 
         // Creator
         VoteCreator get(creator_of): map u64 => Option<T::AccountId>;
@@ -65,18 +82,20 @@ decl_storage! {
 
         // VotedAccounts:[aye:[AccountId], nay:[AccountId],....]
         VotedAccounts: map (ReferenceIndex, u8) => Vec<T::AccountId>;
+
+        LockBalance: map (ReferenceIndex, T::AccountId) => LockInfo<BalanceOf<T>, T::Moment>;
+        LockCount get(lock_count): u64;
     }
 }
 
 decl_module! {
     pub struct Module<T: Trait> for enum Call where origin: T::Origin {
-
         fn deposit_event() = default;
 
         // Creator Modules
         // Create a new vote
         // TODO: Takes expiring time, title as data: Vec, voting_type
-        fn create_vote(origin, data: Vec<u8>) -> Result {
+        pub fn create_vote(origin, vote_type:u8, data: Vec<u8>) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
 
@@ -91,7 +110,7 @@ decl_module! {
             let hashed = <T as system::Trait>::Hashing::hash(&data);
             let new_vote = Vote{
                 id: new_vote_num,
-                vote_type: 0,
+                vote_type,
                 creator: sender.clone(),
                 when: now,
                 vote_ends: vote_exp,
@@ -103,6 +122,37 @@ decl_module! {
             Ok(())
         }
 
+        fn cast_lockvote(origin, reference_index: ReferenceIndex, ballot: Ballot, deposit: BalanceOf<T>, duration: T::BlockNumber) -> Result {
+            let sender = ensure_signed(origin)?;
+            let vote = Self::votes(&reference_index);
+            let now = <timestamp::Module<T>>::now();
+            
+
+            ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
+            ensure!(vote.creator != sender, "You cannot vote your own vote.");
+            ensure!(vote.vote_ends > now, "This vote has already been expired.");
+            ensure!(vote.vote_type == 1, "This vote is not LockVote.");
+            // lock function
+            <LockBalance<T>>::mutate((reference_index, &sender), |lockinfo| lockinfo.deposit += deposit);
+            T::Currency::set_lock(
+                EXAMPLE_ID,
+                &sender,
+                deposit,
+                T::LockPeriod::get(),
+                WithdrawReasons::except(WithdrawReason::TransactionPayment),
+            );
+            // Balance_of(sender).checked_sub(deposit).ok_or("Underflow");
+
+            Ok(())
+        }
+        fn withdraw(origin, reference_index: ReferenceIndex) -> Result {
+            // ensure!(vote has ended)
+            // ensure!(sender has voted the vote)
+            // let deposit = <LockBalance<T>>::get((reference_index, sender));
+            // Balance_of(sender).checked_add(deposit);
+            // <LockBalance<T>>::remove((reference_index, sender));
+            Ok(())
+        }
         // Voter modules
         // cast_ballot checks
             // a. the vote exists
@@ -115,6 +165,7 @@ decl_module! {
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
+            ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
             let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
             let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
             // TODO: Clean up with ::mutate instead of update func
@@ -151,13 +202,6 @@ decl_module! {
             Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
             Ok(())
         }
-        pub fn test_vote(origin, reference_index: ReferenceIndex) -> Result {
-            let sender = ensure_signed(origin)?;
-            let mut accounts = Vec::new();
-            accounts.push(sender);
-            <VotedAccounts<T>>::insert((reference_index, 1), accounts);
-            Ok(())
-        }
 
         // conclude a vote given expired
         // anyone can call this function, and Vote.concluded returns true
@@ -180,6 +224,10 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+    fn lock(){
+
+    }
+
     fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::Moment>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
         ensure!(!<VotesByIndex<T>>::exists(&new_vote_num), "Vote already exists");
 

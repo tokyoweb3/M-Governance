@@ -33,7 +33,7 @@ pub use sr_primitives::BuildStorage;
 pub use timestamp::Call as TimestampCall;
 pub use balances::Call as BalancesCall;
 pub use sr_primitives::{Permill, Perbill};
-pub use support::{StorageValue, construct_runtime, parameter_types, traits::Randomness};
+pub use support::{StorageValue, construct_runtime, parameter_types, traits::{Randomness}};
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -244,6 +244,8 @@ impl template::Trait for Runtime {
 
 impl governance::Trait for Runtime {
 	type Event = Event;
+	type Currency = Balances;
+	type LockPeriod = BlockHashCount;
 }
 
 
