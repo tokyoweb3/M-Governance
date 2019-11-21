@@ -14,15 +14,13 @@ use sr_primitives::traits::{Hash, CheckedAdd};
 // Vote: {id, creator, method, timestamp, expiredate, voters:<Vec:T::AccountId>, options:<Vec: Option>
 #[derive(PartialEq, Encode, Decode, Default)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct Vote<AccountId, Timestamp> {
+pub struct Vote<AccountId, BlockNumber> {
     id: u64,
     creator: AccountId,
-    when: Timestamp, //T::Moment
-    vote_ends: Timestamp,
+    when: BlockNumber,
+    vote_ends: BlockNumber,
     concluded: bool,
     vote_type: u8,
-     //or :map u64 -> AccountId   vec.len().push()
-    // expireblock: 
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -68,14 +66,14 @@ decl_storage! {
     trait Store for Module<T: Trait> as GovernanceModule {
         // All votes
         AllVoteCount get(all_vote_count): u64;
-        VotesByIndex get(votes): map u64 => Vote<T::AccountId, T::Moment>;
+        VotesByIndex get(votes): map u64 => Vote<T::AccountId, T::BlockNumber>;
 
         // Creator
         VoteCreator get(creator_of): map u64 => Option<T::AccountId>;
         CreatedVoteCount get(created_by): map T::AccountId => u64; // increment everytime created
 
         // VoteByCreatorArray get(created_by): map T::AccountId => <Vec: u64>;
-        VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::Moment>;
+        VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::BlockNumber>;
 
         VoteResults: map u64 => Vec<u64>;
         VoteIndexHash get(index_hash): map u64 => T::Hash;
@@ -95,7 +93,7 @@ decl_module! {
         // Creator Modules
         // Create a new vote
         // TODO: Takes expiring time, title as data: Vec, voting_type
-        pub fn create_vote(origin, vote_type:u8, data: Vec<u8>) -> Result {
+        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
 
@@ -103,10 +101,10 @@ decl_module! {
                 .ok_or("Overflow adding vote count")?;
             let vote_count_by_sender = <CreatedVoteCount<T>>::get(sender.clone()).checked_add(1)
                 .ok_or("Overflow adding vote count to the sender")?;
-            let exp_length = 60000.into(); // 30sec for test
-            let now = <timestamp::Module<T>>::get();
+            // let exp_length = 60000.into(); // 30sec for test
+            let now = <system::Module<T>>::block_number();
             // check if resolved if now > vote_exp
-            let vote_exp = now.checked_add(&exp_length).ok_or("Overflow when setting application expiry.")?;
+            let vote_exp = now.checked_add(&exp_length.into()).ok_or("Overflow when setting application expiry.")?;
             let hashed = <T as system::Trait>::Hashing::hash(&data);
             let new_vote = Vote{
                 id: new_vote_num,
@@ -125,20 +123,23 @@ decl_module! {
         fn cast_lockvote(origin, reference_index: ReferenceIndex, ballot: Ballot, deposit: BalanceOf<T>, duration: T::BlockNumber) -> Result {
             let sender = ensure_signed(origin)?;
             let vote = Self::votes(&reference_index);
-            let now = <timestamp::Module<T>>::now();
+            let now = <system::Module<T>>::block_number();
             let lock_id: LockIdentifier = reference_index.to_be_bytes();
             let current_blocknumber = <system::Module<T>>::block_number();
             // duration should be at least vote_end
             // deposit should be smaller than freebalance
+            ensure!(now + duration >= vote.vote_ends, "Lock duration should be or bigger than vote expiry.");
+            ensure!(!<LockBalance<T>>::exists((&reference_index, &sender)), "You cannot lockvote twice.");
             ensure!(T::Currency::free_balance(&sender) > deposit, "You cannot lock more than your free balance!");
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
+            Self::cast_ballot_f(sender, reference_index, ballot)?; // includes checks
             // lock function
             <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| {
                 lockinfo.deposit += deposit;
-                lockinfo.duration += duration;
+                lockinfo.duration = duration;
                 lockinfo.until = current_blocknumber + duration;
             });
             T::Currency::set_lock(
@@ -148,7 +149,6 @@ decl_module! {
                 T::LockPeriod::get(),   // use withdraw function
                 WithdrawReasons::except(WithdrawReason::TransactionPayment),
             );
-            Self::cast_ballot_f(sender, reference_index, ballot)?;
             Ok(())
         }
 
@@ -185,7 +185,7 @@ decl_module! {
         fn cast_ballot(origin, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
             let sender = ensure_signed(origin)?;
             let vote = <VotesByIndex<T>>::get(&reference_index);
-            let now = <timestamp::Module<T>>::now();
+            let now = <system::Module<T>>::block_number();
             ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
@@ -214,7 +214,6 @@ decl_module! {
                         accounts_aye.remove(i);
                     } 
                     accounts_nay.push(sender.clone());
-                    // <VotedAccounts<T>>::mutate((reference_index, 1), |vec| *vec = accounts_nay);
                     <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
                     print("Ballot casted Nay!");
                 }
@@ -226,16 +225,16 @@ decl_module! {
         // conclude a vote given expired
         // anyone can call this function, and Vote.concluded returns true
         pub fn conclude_vote(_origin, reference_index: u64) -> Result {
-            let vote = <VotesByIndex<T>>::get(reference_index);
+            let vote = <VotesByIndex<T>>::get(&reference_index);
             // ensure the vote is concluded before tallying
             ensure!(vote.concluded == false, "This vote has already concluded.");
-            let now = <timestamp::Module<T>>::now();
+            let now = <system::Module<T>>::block_number();
             // double check
-            ensure!(now > vote.vote_ends, "This vote hasn't been expired yet.");
+            ensure!(now > vote.vote_ends, "This vote hasn't been expired yet. Somehow vote.concluded is true...");
             Self::tally(reference_index)?;
             // For some reason Storage is not reflected, but works.
-            <VotesByIndex<T>>::mutate(reference_index, |vote| vote.concluded = true);
-            <VoteByCreatorArray<T>>::mutate((vote.creator, reference_index), |vote| vote.concluded = true);
+            <VotesByIndex<T>>::mutate(&reference_index, |vote| vote.concluded = true);
+            <VoteByCreatorArray<T>>::mutate((vote.creator, &reference_index), |vote| vote.concluded = true);
             Self::deposit_event(RawEvent::Concluded(reference_index));
             print("Vote concluded.");
             Ok(())
@@ -278,7 +277,7 @@ impl<T: Trait> Module<T> {
         Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
         Ok(())
     }
-    fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::Moment>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
+    fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::BlockNumber>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
         ensure!(!<VotesByIndex<T>>::exists(&new_vote_num), "Vote already exists");
 
         <VotesByIndex<T>>::insert(new_vote_num.clone(), &new_vote);
