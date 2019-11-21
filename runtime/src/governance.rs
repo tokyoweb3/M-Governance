@@ -7,7 +7,7 @@ use support::{
 use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
-use sr_primitives::traits::{Hash, CheckedAdd};
+use sr_primitives::traits::{Hash, CheckedAdd, SaturatedConversion};
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
 // Voter: {accountId, votedVotes:<Vec: u64>, timeLastVoted: timestamp, balance: balances}
@@ -135,7 +135,7 @@ decl_module! {
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
-            Self::cast_ballot_f(sender, reference_index, ballot)?; // includes checks
+            
             // lock function
             <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| {
                 lockinfo.deposit += deposit;
@@ -149,6 +149,7 @@ decl_module! {
                 T::LockPeriod::get(),   // use withdraw function
                 WithdrawReasons::except(WithdrawReason::TransactionPayment),
             );
+            Self::cast_ballot_f(sender, reference_index, ballot)?; // includes checks
             Ok(())
         }
 
@@ -230,7 +231,7 @@ decl_module! {
             ensure!(vote.concluded == false, "This vote has already concluded.");
             let now = <system::Module<T>>::block_number();
             // double check
-            ensure!(now > vote.vote_ends, "This vote hasn't been expired yet. Somehow vote.concluded is true...");
+            ensure!(now > vote.vote_ends, "This vote hasn't been expired yet.");
             Self::tally(reference_index)?;
             // For some reason Storage is not reflected, but works.
             <VotesByIndex<T>>::mutate(&reference_index, |vote| vote.concluded = true);
@@ -293,9 +294,31 @@ impl<T: Trait> Module<T> {
 
     // only called after the vote expired
     fn tally(reference_index: u64) -> Result {
-        // ensure: vote has ended(expiringblock < currentblocknumber), called by the module?
-        let aye_count = <VotedAccounts<T>>::get((reference_index, 0)).len() as u64;
-        let nay_count = <VotedAccounts<T>>::get((reference_index, 1)).len() as u64;
+        let vote = Self::votes(reference_index);
+        let mut aye_count: u64 = 0;
+        let mut nay_count: u64 = 0;
+        match vote.vote_type {
+            // normal vote tally
+            0 => {
+                aye_count = <VotedAccounts<T>>::get((reference_index, 0)).len() as u64;
+                nay_count = <VotedAccounts<T>>::get((reference_index, 1)).len() as u64;
+            }
+            // lock vote tally
+            // deposit amount * duration
+            1 => {
+                for account in <VotedAccounts<T>>::get((reference_index, 0)) {
+                    let lock_vote = <LockBalance<T>>::get((reference_index, account));
+                    let vote_power: u64 = lock_vote.deposit.saturated_into::<u64>() * lock_vote.duration.saturated_into::<u64>();
+                    aye_count += vote_power;
+                }
+                for account in <VotedAccounts<T>>::get((reference_index, 0)) {
+                    let lock_vote = <LockBalance<T>>::get((reference_index, account));
+                    let vote_power: u64 = lock_vote.deposit.saturated_into::<u64>() * lock_vote.duration.saturated_into::<u64>();
+                    nay_count += vote_power;
+                }
+            }
+            _ => ensure!(vote.vote_type <= 1, "This vote_type is not covered."),
+        }
         let mut result:Vec<u64> = Vec::new();
         result.push(aye_count);
         result.push(nay_count);
