@@ -1,20 +1,23 @@
 {
-  "Vote": {
-    "id": "u64",
-    "when": "Moment",
-    "vote_ends": "Moment",
-    "concluded": "bool",
-    "creator": "AccountId",
-    "vote_type": "u8",
-    "aye": "Vec<AccountId>",
-    "nay": "Vec<AccountId>"
-  },
-  "Ballot": {
-    "_enum": [
-      "Aye",
-      "Nay"
-    ]
-  },
-  "IndexReference": "u64",
-  "data": "Vec<u8>"
-}
+    "ReferenceIndex": "u64",
+    "data": "Vec<u8>",
+    "Vote": {
+      "id": "u64",
+      "creator": "AccountId",
+      "when": "BlockNumber",
+      "vote_ends": "BlockNumber",
+      "concluded": "bool",
+      "vote_type": "u8"
+    },
+    "LockInfo": {
+      "deposit": "BalanceOf",
+      "duration": "BlockNumber",
+      "until": "BlockNumber"
+    },
+    "Ballot": {
+      "_enum": [
+        "Aye",
+        "Nay"
+      ]
+    }
+  }
