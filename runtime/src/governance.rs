@@ -42,7 +42,7 @@ pub type ReferenceIndex = u64;
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 
 // import Trait from balances, timestamp, event
-pub trait Trait: balances::Trait + timestamp::Trait + system::Trait {
+pub trait Trait: balances::Trait + system::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
     type Currency: LockableCurrency<Self::AccountId, Moment=Self::BlockNumber>;
     type LockPeriod: Get<Self::BlockNumber>;
@@ -330,10 +330,54 @@ impl<T: Trait> Module<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-    use support::{decl_module, decl_storage, decl_event, dispatch::Result };
     use system::ensure_signed;
     use codec::{Encode, Decode};
+    use support::{
+        decl_module, decl_storage, decl_event, dispatch::Result, ensure, print,
+        traits::{
+            LockableCurrency, WithdrawReason, WithdrawReasons, LockIdentifier, Get, Currency,
+        }
+    };
+    use rstd::prelude::Vec;
+    use sr_primitives::traits::{Hash, CheckedAdd, SaturatedConversion};
 
+    impl_outer_origin! {
+        pub enum Origin for GovernanceTest {}
+    }
+
+    #[derive(Clone, Eq, PartialEq)]
+    pub struct GovernanceTest;
+
+    impl Trait for GovernanceTest {
+        type Event = ();
+        type Currency: LockableCurrency<Self::AccountId, Moment=Self::BlockNumber>;
+        type LockPeriod: Get<Self::BlockNumber>;
+    }
+
+    impl system::Trait for GovernanceTest {
+        type Origin = Origin;
+        type Index = u64;
+        type BlockNumber = u64;
+        type Hash = H256;
+        type Hashing = BlakeTwo256;
+        type Digest = Digest;
+        type AccountId = u64;
+        type Lookup = IdentityLookup<Self::AccountId>;
+        type Header = Header;
+        type Event = ();
+        type Log = DigestItem;
+    }
+
+    impl system::Balances for GovernanceTest {
+        type Balance = u64;
+        type OnFreeBalanceZero = ();
+        type OnNewAccount = ();
+        type Event = ();
+        type TransactionPayment = ();
+        type TransferPayment = ();
+        type DustRemoval = ();
+    }
+    
 	#[test]
 	fn vote_creation() {
         
