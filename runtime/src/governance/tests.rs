@@ -5,7 +5,7 @@ use super::*;
 // use codec::{Encode, Decode};
 use support::{
     impl_outer_origin, assert_ok, assert_noop, parameter_types,
-    traits::{Currency,}
+    traits::{Currency}
 };
 // use rstd::prelude::Vec;
 // use sr_primitives::traits::{Hash, CheckedAdd, SaturatedConversion};
@@ -26,7 +26,6 @@ pub struct Test;
 impl Trait for Test {
     type Event = ();
     type Currency = balances::Module<Test>;
-    type LockPeriod = BlockHashCount;
 }
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
@@ -97,9 +96,6 @@ fn it_works() {
     build_ext().execute_with(|| {
         assert!(true);
     });
-    // TestExternalities::default().execute_with(|| {
-    //     assert!(true);
-    // });
 }
 
 #[test]
@@ -154,7 +150,7 @@ fn set_free_balance() {
     assert_eq!(total_balance_before, 100);
     Balances::make_free_balance_be(&1, 100);
     Balances::make_free_balance_be(&2, 100);
-    assert_eq!(total_balance_before, Balances::free_balance(&1) + Balances::reserved_balance(&1));
+    assert_eq!(total_balance_before, Balances::free_balance(&1));
 }
 #[test]
 fn cast_lockvote() {
@@ -178,10 +174,16 @@ fn cast_lockvote() {
         // should succeed casting lockvote
         assert_ok!(Governance::cast_lockvote(Origin::signed(1), 2, ballot, 1, 10));
 
+        // [BalanceLock { id: [0, 0, 0, 0, 0, 0, 0, 2], amount: 1, until: `18446744073709551615`, reasons: WithdrawReasons { mask: 14 } }]
+        let locked_balance = Balances::locks(&1);
+        assert_eq!(1, locked_balance[0].amount);
+        assert_eq!(u64::max_value().saturated_into::<u64>(), Balances::locks(&1)[0].until);
+
         // new item in LockBalance
         let lock_vote = <LockBalance<Test>>::get((2, 1));
         // lockbalance deposit should be 1
         assert_eq!(lock_vote.deposit, 1);
+
         // deposit should be 100
         assert_eq!(lock_vote.duration, 10);
         // until should be 100 + current blocknumber
@@ -190,7 +192,6 @@ fn cast_lockvote() {
         // proceed #1 -> #15
         run_to_block(15);
         assert_eq!(System::block_number(), 15);
-
         // This vote has already been expired.
         assert_noop!(Governance::cast_lockvote(Origin::signed(2), 2, ballot, 1, 10), "This vote has already been expired.");
     });
@@ -199,16 +200,15 @@ fn cast_lockvote() {
 #[test]
 fn withdraw() {
     build_ext().execute_with(|| {
-        let free_balance_before = Balances::free_balance(&1);
         set_free_balance();
         // create vote
         assert_ok!(Governance::create_vote(Origin::signed(10), 1, 5, [00].to_vec()));
         // cast_lock vote
         assert_ok!(Governance::cast_lockvote(Origin::signed(1), 1, Ballot::Aye, 1, 10));
 
-        let free_balance = Balances::free_balance(&1);
-        let reserved_balance = Balances::reserved_balance(&1);
-        assert_eq!(free_balance, free_balance_before - reserved_balance);
+        let locked_balance = Balances::locks(&1);
+        assert_eq!(1, locked_balance[0].amount);
+
         // cannot withdraw unless LockInfo.until < Block_number
         assert_noop!(Governance::withdraw(Origin::signed(1), 1), "You have to wait at least until the vote concludes!");
 
@@ -227,10 +227,9 @@ fn withdraw() {
         // cannot withdraw twice
         assert_noop!(Governance::withdraw(Origin::signed(1), 1), "You need to participate lockvoting to call this function!");
 
-        // freebalance is increased by the ammount of deposit
-        let free_balance_after = Balances::free_balance(&1);
-
-        assert_eq!(free_balance_after, free_balance_before);
+        // locked balance should be zero
+        let locked_balance = Balances::locks(&1);
+        assert_eq!(locked_balance, Balances::locks(&100));
     });
 }
 

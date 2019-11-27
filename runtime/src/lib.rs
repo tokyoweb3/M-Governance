@@ -245,7 +245,6 @@ impl template::Trait for Runtime {
 impl governance::Trait for Runtime {
 	type Event = Event;
 	type Currency = Balances;
-	type LockPeriod = BlockHashCount;
 }
 
 

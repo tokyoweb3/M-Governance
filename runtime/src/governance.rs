@@ -1,7 +1,7 @@
 use support::{
     decl_module, decl_storage, decl_event, dispatch::Result, ensure, print,
     traits::{
-        LockableCurrency, WithdrawReason, WithdrawReasons, LockIdentifier, Get, Currency,
+        LockableCurrency, WithdrawReason, WithdrawReasons, LockIdentifier, Currency,
     }
 };
 use system::ensure_signed;
@@ -47,7 +47,6 @@ pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>
 pub trait Trait: balances::Trait + system::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
     type Currency: LockableCurrency<Self::AccountId, Moment=Self::BlockNumber>;
-    type LockPeriod: Get<Self::BlockNumber>;
 }
 
 decl_event!(
@@ -144,11 +143,12 @@ decl_module! {
                 lockinfo.duration = duration;
                 lockinfo.until = current_blocknumber + duration;
             });
+            let until = u64::max_value();
             T::Currency::set_lock(
                 lock_id,
                 &sender,
                 deposit,
-                T::LockPeriod::get(),   // use withdraw function
+                until.saturated_into::<T::BlockNumber>(),   // use withdraw function
                 WithdrawReasons::except(WithdrawReason::TransactionPayment),
             );
             Self::cast_ballot_f(sender, reference_index, ballot)?; // includes checks
