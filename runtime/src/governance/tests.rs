@@ -1,14 +1,9 @@
 #![cfg(test)]
-
 use super::*;
-// use system::ensure_signed;
-// use codec::{Encode, Decode};
 use support::{
     impl_outer_origin, assert_ok, assert_noop, parameter_types,
     traits::{Currency}
 };
-// use rstd::prelude::Vec;
-// use sr_primitives::traits::{Hash, CheckedAdd, SaturatedConversion};
 use runtime_io::{TestExternalities};
 use primitives::{H256};
 use sr_primitives::{
@@ -201,7 +196,7 @@ fn cast_lockvote() {
 fn withdraw() {
     build_ext().execute_with(|| {
         set_free_balance();
-        // create vote
+        // create vote. vote.vote_ends = 1 + 5 = 6
         assert_ok!(Governance::create_vote(Origin::signed(10), 1, 5, [00].to_vec()));
         // cast_lock vote
         assert_ok!(Governance::cast_lockvote(Origin::signed(1), 1, Ballot::Aye, 1, 10));
@@ -209,19 +204,29 @@ fn withdraw() {
         let locked_balance = Balances::locks(&1);
         assert_eq!(1, locked_balance[0].amount);
 
-        // cannot withdraw unless LockInfo.until < Block_number
+        // cannot withdraw unless vote.concluded == true && LockInfo.until < Block_number
         assert_noop!(Governance::withdraw(Origin::signed(1), 1), "You have to wait at least until the vote concludes!");
 
-        // proceed #1 -> #15
-        run_to_block(15);
-        assert_eq!(System::block_number(), 15);
+        // cannot conclude before vote is expired
+        assert_noop!(Governance::conclude_vote(Origin::signed(1),1), "This vote hasn\'t been expired yet.");
+
+        // proceed #1 -> #7. vote.vote_ends is 6 because #1 + duration.
+        run_to_block(7);
+        assert_eq!(System::block_number(), 7);
         
         // still, need to be concluded
         assert_noop!(Governance::withdraw(Origin::signed(1), 1), "You have to wait at least until the vote concludes!");
 
+        // conclude the vote
         assert_ok!(Governance::conclude_vote(Origin::signed(1), 1));
 
-        // withdraw after conclude
+        // withdraw after conclude. Still need to wait until the lock period is over
+        assert_noop!(Governance::withdraw(Origin::signed(1), 1), "You need to wait until the lock period is over!");
+
+        // proceed #5 -> #15
+        run_to_block(15);
+        assert_eq!(System::block_number(), 15);
+
         assert_ok!(Governance::withdraw(Origin::signed(1), 1));
 
         // cannot withdraw twice
