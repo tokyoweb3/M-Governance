@@ -9,7 +9,7 @@
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 use rstd::prelude::*;
-use primitives::{OpaqueMetadata, crypto::key_types};
+use primitives::{OpaqueMetadata, crypto::key_types, U256};
 use sr_primitives::{
 	ApplyResult, transaction_validity::TransactionValidity, generic, create_runtime_str,
 	impl_opaque_keys, AnySignature
@@ -65,6 +65,7 @@ pub type DigestItem = generic::DigestItem<Hash>;
 // mod template;
 mod governance;
 mod mynumber;
+mod rsa;
 
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
 /// the specifics of the runtime. They can then be made to be agnostic over specific formats
