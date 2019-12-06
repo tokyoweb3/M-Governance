@@ -1,14 +1,13 @@
 # M-Governance Runtime Module
 
-### オンチェーン完結分散型組織意思決定プラットフォーム
-投票提案から結果集計までM-Govenanceチェーンで記録し、PolkadotのRelaychainを通して他のParachainに検証済の結果参照を提供する。<br>
-特徴：
-- 分散的なコミュニティのガバナンスや、簡単な意思集約
-- 投票内容によるパフォーマンスの高い投票モデルの選定
-- Relaychainでの検証による安全性の高い投票
-- 既存のチェーンにモジュールのようにプロトコルに組み込める
-- 集約結果によるコントラクトの自動トリガー
+### Modular Onchain Voting Platform
 
+Advantages：
+- Provides many tools, models and settings to easily make the best performing vote
+- Vote result can be referenced by different Blockchain through Polkadot
+- Vote result can automatically trigger next move in smartcontract
+- Approved voting with CA makes 1 person 1 vote possible
+- Like a module, M-Governance can be easily embedded into existing Blockchain
 
 ## Build
 
