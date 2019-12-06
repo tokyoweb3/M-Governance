@@ -1,3 +1,4 @@
+use crate::mynumber;
 use support::{
     decl_module, decl_storage, decl_event, dispatch::Result, ensure, print,
     traits::{
@@ -18,11 +19,12 @@ mod tests;
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Vote<AccountId, BlockNumber> {
     id: u64,
+    vote_type: u8,
+    approved: bool,
     creator: AccountId,
     when: BlockNumber,
     vote_ends: BlockNumber,
     concluded: bool,
-    vote_type: u8,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -44,7 +46,7 @@ pub type ReferenceIndex = u64;
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 
 // import Trait from balances, timestamp, event
-pub trait Trait: balances::Trait + system::Trait {
+pub trait Trait: mynumber::Trait + balances::Trait + system::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
     type Currency: LockableCurrency<Self::AccountId, Moment=Self::BlockNumber>;
 }
@@ -94,7 +96,7 @@ decl_module! {
         // Creator Modules
         // Create a new vote
         // TODO: Takes expiring time, title as data: Vec, voting_type
-        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>) -> Result {
+        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>, approved: bool) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
 
@@ -110,6 +112,7 @@ decl_module! {
             let new_vote = Vote{
                 id: new_vote_num,
                 vote_type,
+                approved,
                 creator: sender.clone(),
                 when: now,
                 vote_ends: vote_exp,
@@ -137,6 +140,9 @@ decl_module! {
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
             
+            if vote.approved {
+                mynumber::Module::<T>::check_account(sender.clone())?;
+            }
             // lock function
             <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| {
                 lockinfo.deposit += deposit;
@@ -193,6 +199,9 @@ decl_module! {
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
+            if vote.approved {
+                mynumber::Module::<T>::check_account(sender.clone())?;
+            }
             let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
             let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
             // keep track of voter's id in aye or nay vector in Vote

@@ -1,5 +1,6 @@
 #![cfg(test)]
 use super::*;
+use crate::mynumber;
 use support::{
     impl_outer_origin, assert_ok, assert_noop, parameter_types,
     traits::{Currency}
@@ -33,7 +34,9 @@ parameter_types! {
     pub const CreationFee: u64 = 0;
 }
 
-
+impl mynumber::Trait for Test {
+    type Event = ();
+}
 impl system::Trait for Test {
     type Origin = Origin;
     type Index = u64;
@@ -97,7 +100,7 @@ fn it_works() {
 fn should_pass_vote_creation() {
     TestExternalities::default().execute_with(|| {
         // create a normal vote with account #10.
-        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 10, [00].to_vec()));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 10, [00].to_vec(), false));
         
         // Vote number shoud be incremented by 1
         assert_eq!(Governance::all_vote_count(), 1);
@@ -107,7 +110,7 @@ fn should_pass_vote_creation() {
         assert_eq!(Governance::creator_of(1), Some(10));
 
         // create a lockvote with account #10
-        assert_ok!(Governance::create_vote(Origin::signed(10), 1, 10, [00].to_vec()));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 1, 10, [00].to_vec(), false));
         assert_eq!(Governance::all_vote_count(), 2);
 
         let vote = Governance::votes(2);
@@ -126,7 +129,7 @@ fn should_pass_vote_creation() {
 fn cast_ballot() {
     TestExternalities::default().execute_with(|| {
         let ballot = Ballot::Aye;
-        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 10, [00].to_vec()));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 10, [00].to_vec(), false));
         // should pass cast ballot, check vote_type
         assert_ok!(Governance::cast_ballot(Origin::signed(1), 1, ballot));
         assert_noop!(Governance::cast_ballot(Origin::signed(10), 1, ballot), "You cannot vote your own vote.");
@@ -153,8 +156,8 @@ fn cast_lockvote() {
         set_free_balance();
 
         let ballot = Ballot::Aye;
-        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 5, [00].to_vec()));
-        assert_ok!(Governance::create_vote(Origin::signed(10), 1, 5, [00].to_vec()));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 5, [00].to_vec(), false));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 1, 5, [00].to_vec(), false));
 
         let vote = Governance::votes(1);
         // vote should be active
@@ -197,7 +200,7 @@ fn withdraw() {
     build_ext().execute_with(|| {
         set_free_balance();
         // create vote. vote.vote_ends = 1 + 5 = 6
-        assert_ok!(Governance::create_vote(Origin::signed(10), 1, 5, [00].to_vec()));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 1, 5, [00].to_vec(), false));
         // cast_lock vote
         assert_ok!(Governance::cast_lockvote(Origin::signed(1), 1, Ballot::Aye, 1, 10));
 
@@ -241,7 +244,7 @@ fn withdraw() {
 #[test]
 fn conclude() {
     TestExternalities::default().execute_with(|| {
-        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 5, [00].to_vec()));
+        assert_ok!(Governance::create_vote(Origin::signed(10), 0, 5, [00].to_vec(), false));
 
         // proceed #1 -> #15
         run_to_block(15);
