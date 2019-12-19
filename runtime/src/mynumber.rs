@@ -16,16 +16,13 @@ pub trait Trait: system::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
 
-pub type RSA = Vec<u8>; //2048bit
-pub type Pubkey = Vec<u8>; //2048bits
-
 
 #[derive(PartialEq, Encode, Decode, Default)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct Certification<Pubkey, Hash> {
-    pubkey: Pubkey,    // mynumber pubkey
+pub struct Certification <Hash> {
+    pubkey: Hash,    // mynumber pubkey
     cert: Hash,  // mynumber signed by CA
-    encrypted_account: Hash,     // account encrypted with pubkey
+    signature: Hash,     // account signed with pubkey
 }
 
 decl_event!(
@@ -38,10 +35,7 @@ decl_storage! {
     trait Store for Module<T: Trait> as MyNumber {
         AccountCount get(accounts_count): u64;
         // Public Key => MyNumber, Signed Hashed of Public Key with MyNumberPublicKey: 
-        AccountStore: map T::AccountId => Certification<Pubkey, T::Hash>;
-        
-        // My Number => Hash of mynumber signed by Government
-        // MyNumberStore get(signature): RSA => RSA;
+        AccountStore: map T::AccountId => Certification<T::Hash>;
     }
 }
 
@@ -50,8 +44,10 @@ decl_module! {
         fn deposit_event() = default;
 
         // register
-        pub fn register_account(origin, pubkey: Pubkey, cert: T::Hash, encrypted_account: T::Hash) -> Result{
-            ensure!(pubkey.len() <= 256, "RSA public key should be 256 bytes");
+        pub fn register_account(origin, pubkey: T::Hash, cert: T::Hash, signature: T::Hash) -> Result{
+            // ensure!(pubkey.len() <= 32, "Public Key should be a hash of 32-byte hex. Use SHA-256, then encode to hex.");
+            // ensure!(cert.len() <= 32, "Certificate should be a hash of 32-byte hex. Use SHA-256, then encode to hex.");
+            // ensure!(signature.len() <= 32, "Signature should be a hash of 32-byte hex. Use SHA-256, then encode to hex.");
 
             let sender = ensure_signed(origin)?;
             ensure!(!<AccountStore<T>>::exists(&sender), "Your account is already registered.");
@@ -60,7 +56,7 @@ decl_module! {
             let certificate = Certification {
                 pubkey,
                 cert,
-                encrypted_account,
+                signature,
             };
             
             <AccountStore<T>>::insert(sender, certificate);
@@ -169,7 +165,7 @@ mod tests {
             let certification = Certification {
                 pubkey,
                 cert,
-                encrypted_account: signed_account,
+                signature: signed_account,
             };
             
             assert_eq!(<AccountStore<Test>>::get(1), certification);
