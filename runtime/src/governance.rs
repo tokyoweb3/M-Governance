@@ -1,4 +1,4 @@
-use crate::mynumber;
+use crate::certificate;
 use support::{
     decl_module, decl_storage, decl_event, dispatch::Result, ensure, print,
     traits::{
@@ -46,7 +46,7 @@ pub type ReferenceIndex = u64;
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 
 // import Trait from balances, timestamp, event
-pub trait Trait: mynumber::Trait + balances::Trait + system::Trait {
+pub trait Trait: certificate::Trait + balances::Trait + system::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
     type Currency: LockableCurrency<Self::AccountId, Moment=Self::BlockNumber>;
 }
@@ -141,7 +141,7 @@ decl_module! {
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
             
             if vote.approved {
-                mynumber::Module::<T>::check_account(sender.clone())?;
+                certificate::Module::<T>::check_account(sender.clone())?;
             }
             // lock function
             <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| {
@@ -200,7 +200,7 @@ decl_module! {
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
             if vote.approved {
-                mynumber::Module::<T>::check_account(sender.clone())?;
+                certificate::Module::<T>::check_account(sender.clone())?;
             }
             let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
             let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));

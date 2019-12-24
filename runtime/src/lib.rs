@@ -9,7 +9,7 @@
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 use rstd::prelude::*;
-use primitives::{OpaqueMetadata, crypto::key_types, U256};
+use primitives::{OpaqueMetadata, crypto::key_types};
 use sr_primitives::{
 	ApplyResult, transaction_validity::TransactionValidity, generic, create_runtime_str,
 	impl_opaque_keys, AnySignature
@@ -64,7 +64,7 @@ pub type DigestItem = generic::DigestItem<Hash>;
 /// Used for the module template in `./template.rs`
 // mod template;
 mod governance;
-mod mynumber;
+mod certificate;
 mod rsa;
 
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
@@ -240,7 +240,7 @@ impl sudo::Trait for Runtime {
 }
 
 /// Used for the module template in `./template.rs`
-impl mynumber::Trait for Runtime {
+impl certificate::Trait for Runtime {
 	type Event = Event;
 }
 
@@ -265,7 +265,7 @@ construct_runtime!(
 		TransactionPayment: transaction_payment::{Module, Storage},
 		Sudo: sudo,
 		// Used for the module template in `./template.rs`
-		MyNumberModule: mynumber::{Module, Call, Storage, Event<T>},
+		CertificateModule: certificate::{Module, Call, Storage, Event<T>},
 		RandomnessCollectiveFlip: randomness_collective_flip::{Module, Call, Storage},
 		GovernanceModule: governance::{Module, Call, Storage, Event<T>},
 	}
