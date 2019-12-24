@@ -146,7 +146,7 @@ impl system::Trait for Runtime {
 	/// The index type for blocks.
 	type BlockNumber = BlockNumber;
 	/// The type for hashing blocks and tries.
-	type Hash = Hash;
+	type Hash = primitives::H256;
 	/// The hashing algorithm used.
 	type Hashing = BlakeTwo256;
 	/// The header type.

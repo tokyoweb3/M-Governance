@@ -1,4 +1,5 @@
 use crate::certificate;
+
 use support::{
     decl_module, decl_storage, decl_event, dispatch::Result, ensure, print,
     traits::{
@@ -17,10 +18,10 @@ mod tests;
 // Vote: {id, creator, method, timestamp, expiredate, voters:<Vec:T::AccountId>, options:<Vec: Option>
 #[derive(PartialEq, Encode, Decode, Default)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct Vote<AccountId, BlockNumber> {
+pub struct Vote<AccountId, BlockNumber, Hash> {
     id: u64,
     vote_type: u8,
-    approved: bool,
+    approved: Hash, // Index for required certificate. 0 means no certificate is required. 
     creator: AccountId,
     when: BlockNumber,
     vote_ends: BlockNumber,
@@ -69,14 +70,14 @@ decl_storage! {
     trait Store for Module<T: Trait> as GovernanceModule {
         // All votes
         AllVoteCount get(all_vote_count): u64;
-        VotesByIndex get(votes): map u64 => Vote<T::AccountId, T::BlockNumber>;
+        VotesByIndex get(votes): map u64 => Vote<T::AccountId, T::BlockNumber, T::Hash>;
 
         // Creator
         VoteCreator get(creator_of): map u64 => Option<T::AccountId>;
         CreatedVoteCount get(created_by): map T::AccountId => u64; // increment everytime created
 
         // VoteByCreatorArray get(created_by): map T::AccountId => <Vec: u64>;
-        VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::BlockNumber>;
+        VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::BlockNumber, T::Hash>;
 
         VoteResults: map u64 => Vec<u64>;
         VoteIndexHash get(index_hash): map u64 => T::Hash;
@@ -96,7 +97,7 @@ decl_module! {
         // Creator Modules
         // Create a new vote
         // TODO: Takes expiring time, title as data: Vec, voting_type
-        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>, approved: bool) -> Result {
+        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>, cert_index: u64) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
 
@@ -109,10 +110,21 @@ decl_module! {
             // check if resolved if now > vote_exp
             let vote_exp = now.checked_add(&exp_length.into()).ok_or("Overflow when setting application expiry.")?;
             let hashed = <T as system::Trait>::Hashing::hash(&data);
+
+            let ca_hash:T::Hash;
+            if cert_index != 0 {
+              // certificate::Module::<T>::check_cahash_by_index(certIndex)?;
+              // make sure that provided cert exists for the index
+              ensure!(certificate::CAHashByIndex::<T>::exists(cert_index), "CAHash doesn't exist in provided cert_index");
+              ca_hash = certificate::Module::<T>::cahash_by_index(cert_index);
+            } else {
+              ca_hash = T::Hash::default();
+            }
+
             let new_vote = Vote{
                 id: new_vote_num,
                 vote_type,
-                approved,
+                approved: ca_hash,
                 creator: sender.clone(),
                 when: now,
                 vote_ends: vote_exp,
@@ -140,8 +152,9 @@ decl_module! {
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
             
-            if vote.approved {
-                certificate::Module::<T>::check_account(sender.clone())?;
+            if vote.approved != T::Hash::default() {
+              // fails is the sender's account is not registered for CAHash.
+                certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
             }
             // lock function
             <LockBalance<T>>::mutate((&reference_index, &sender), |lockinfo| {
@@ -199,8 +212,10 @@ decl_module! {
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
-            if vote.approved {
-                certificate::Module::<T>::check_account(sender.clone())?;
+
+            if vote.approved != T::Hash::default() {
+              // fails is the sender's account is not registered for CAHash.
+                certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
             }
             let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
             let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
@@ -216,7 +231,6 @@ decl_module! {
                         accounts_nay.remove(i);
                     } 
                     accounts_aye.push(sender.clone());
-                    <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
                     print("Ballot casted Aye!");
                 }
                 Ballot::Nay => {
@@ -226,10 +240,12 @@ decl_module! {
                         accounts_aye.remove(i);
                     } 
                     accounts_nay.push(sender.clone());
-                    <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
                     print("Ballot casted Nay!");
                 }
             }
+
+            <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
+            <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
             Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
             Ok(())
         }
@@ -289,7 +305,7 @@ impl<T: Trait> Module<T> {
         Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
         Ok(())
     }
-    fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::BlockNumber>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
+    fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::BlockNumber, T::Hash>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
         ensure!(!<VotesByIndex<T>>::exists(&new_vote_num), "Vote already exists");
 
         <VotesByIndex<T>>::insert(new_vote_num.clone(), &new_vote);
