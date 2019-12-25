@@ -38,11 +38,14 @@ decl_storage! {
         CAHashCount get(cahash_count): u64;
         pub CAHashByIndex get(cahash_by_index): map u64 => T::Hash;
         IndexByCAHash get(index_by_cahash): map T::Hash => u64;
+        CAHashes get(cahashes): map u8 => Vec<T::Hash>;
 
         AccountsByCAHash get(accounts_by_cahash): map T::Hash => Vec<T::AccountId>;
         CAHashesByAccount get(cahashes_by_account): map T::AccountId => Vec<T::Hash>;
 
         CertificateStore get(certificate_store): map (T::AccountId, T::Hash) => Certification<T::Hash>;
+        // used for checking if any duplicate exists.
+        CertHashes get(cert_hashes): map u8 => Vec<T::Hash>;
     }
 }
 
@@ -62,8 +65,15 @@ decl_module! {
             ensure!(!<IndexByCAHash<T>>::exists(&ca_hash), "Provided CAHash is already registered.");
             ensure!(!<CAHashByIndex<T>>::exists(&new_count), "Error: Overlapping count exists.");
             
+            let mut new_hashes = Self::cahashes(0);
+            new_hashes.push(ca_hash);
+
             <CAHashByIndex<T>>::insert(new_count, ca_hash);
             <IndexByCAHash<T>>::insert(ca_hash, new_count);
+
+            <CAHashes<T>>::remove(0);
+            <CAHashes<T>>::insert(0, new_hashes);
+
             <CAHashCount>::put(new_count);
             print("New CA has been successly registered!");
             Ok(())
@@ -75,11 +85,13 @@ decl_module! {
         //  - b: Account doesn't exist in AccountsByCAHash
         //  - c: Hash doesn't exist in HashByAccount
         //  - d: Nothing exists in CertificateStore(Account, Hash)
+        //  - e: Cert isn't used for registering another account
         pub fn register_account(origin, ca_hash: T::Hash, cert: T::Hash, signature: T::Hash) -> Result{
             let sender = ensure_signed(origin)?;
 
             let mut accounts = <AccountsByCAHash<T>>::get(&ca_hash);
             let mut hashes = <CAHashesByAccount<T>>::get(&sender);
+            let mut certs = Self::cert_hashes(0);
             // a
             ensure!(<IndexByCAHash<T>>::exists(ca_hash), "Provided CAHash doesn't exist.");
             // b
@@ -88,6 +100,8 @@ decl_module! {
             ensure!(!hashes.contains(&ca_hash), "CAHash is already resigtered for this account");
             // d 
             ensure!(!<CertificateStore<T>>::exists((&sender, &ca_hash)), "This account for this specific CAHash already has Certification.");
+            // e
+            ensure!(!certs.contains(&cert), "Your cert is already used to register another account.");
 
             let certificate = Certification {
                 cert,
@@ -101,6 +115,10 @@ decl_module! {
             hashes.push(ca_hash.clone());
             <CAHashesByAccount<T>>::remove(&sender);
             <CAHashesByAccount<T>>::insert(&sender, hashes);
+
+            certs.push(cert);
+            <CertHashes<T>>::remove(0);
+            <CertHashes<T>>::insert(0, certs);
 
             <CertificateStore<T>>::insert((&sender, ca_hash), certificate);
             print("Account successfully registered!");
@@ -234,8 +252,10 @@ mod tests {
         assert_eq!(Certificate::cahashes_by_account(1).len(), 1);
         assert_eq!(Certificate::certificate_store((1, CAHash)), certificate);
 
-        // cannot register account for the same hash twice
+        // cannot register account with the same hash twice
         assert_noop!(Certificate::register_account(Origin::signed(1), CAHash, cert, signature), "Provided account is already registered for this CAHash.");
+        // cannot use same certHash twice
+        assert_noop!(Certificate::register_account(Origin::signed(2), CAHash, cert, signature), "Your cert is already used to register another account.");
         
       });
     }
