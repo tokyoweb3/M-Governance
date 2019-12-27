@@ -84,6 +84,7 @@ decl_storage! {
 
         // VotedAccounts:[aye:[AccountId], nay:[AccountId],....]
         VotedAccounts: map (ReferenceIndex, u8) => Vec<T::AccountId>;
+        Options: map ReferenceIndex => Vec<String>;
 
         LockBalance: map (ReferenceIndex, T::AccountId) => LockInfo<BalanceOf<T>, T::BlockNumber>;
         LockCount get(lock_count): u64;
