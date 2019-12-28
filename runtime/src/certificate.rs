@@ -155,7 +155,7 @@ impl<T: Trait> Module<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rsa::*;
+    // use crate::rsa::*;
     use support::{
         impl_outer_origin, assert_ok, assert_noop, parameter_types
     };
@@ -166,7 +166,7 @@ mod tests {
     };
     use primitives::{H256};
     // extern crate rustc_hex;
-    use rustc_hex::{FromHex, ToHex};
+    // use rustc_hex::{FromHex, ToHex};
     // use rustc_serialize::base64::{ToBase64, FromBase64, STANDARD};
 
     impl_outer_origin! {

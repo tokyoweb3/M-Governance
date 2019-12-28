@@ -10,7 +10,6 @@ use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
 use sr_primitives::traits::{Hash, CheckedAdd, SaturatedConversion};
-
 mod tests;
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
@@ -84,7 +83,9 @@ decl_storage! {
 
         // VotedAccounts:[aye:[AccountId], nay:[AccountId],....]
         VotedAccounts: map (ReferenceIndex, u8) => Vec<T::AccountId>;
-        Options: map ReferenceIndex => Vec<String>;
+        AccountsByOption: map (ReferenceIndex, u8) => Vec<T::AccountId>;
+        VotedOption: map(ReferenceIndex, T::AccountId) => u8;
+        VoteOptions: map u64 => Vec<Vec<u8>>;
 
         LockBalance: map (ReferenceIndex, T::AccountId) => LockInfo<BalanceOf<T>, T::BlockNumber>;
         LockCount get(lock_count): u64;
@@ -98,7 +99,7 @@ decl_module! {
         // Creator Modules
         // Create a new vote
         // TODO: Takes expiring time, title as data: Vec, voting_type
-        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>, cert_index: u64) -> Result {
+        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>, cert_index: u64, options: Vec<Vec<u8>>) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
 
@@ -131,6 +132,12 @@ decl_module! {
                 vote_ends: vote_exp,
                 concluded: false,
             };
+
+            // // options
+            ensure!(!<VoteOptions>::exists(new_vote_num), "Vote already exists in option storage");
+            ensure!((options.len() as u8) > 0, "At least one option should be provided.");
+            ensure!((options.len() as u8) < 255, "Cannot add more than 254 options");
+            <VoteOptions>::insert(new_vote_num, options);
 
             Self::mint_vote(sender, new_vote, vote_count_by_sender, new_vote_num)?;
             <VoteIndexHash<T>>::insert(new_vote_num, hashed);
@@ -248,6 +255,51 @@ decl_module! {
             <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
             <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
             Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
+            Ok(())
+        }
+
+        fn cast_ballot_with_options(origin, reference_index: ReferenceIndex, option: u8) -> Result {
+            let sender = ensure_signed(origin)?;
+            let vote = <VotesByIndex<T>>::get(&reference_index);
+            let now = <system::Module<T>>::block_number();
+            ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
+            ensure!(vote.creator != sender, "You cannot vote your own vote.");
+            ensure!(vote.vote_ends > now, "This vote has already been expired.");
+            ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
+
+            if vote.approved != T::Hash::default() {
+              // fails is the sender's account is not registered for CAHash.
+                certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
+            }
+
+            // check if the option is in a valid range
+            let options = <VoteOptions>::get(reference_index); // => Vec<Vec<u8>>
+            ensure!(option <= options.len() as u8, "Provided option out of range.");
+
+            let mut accounts = <AccountsByOption<T>>::get((&reference_index, &option));
+            let mut voted_option:u8 = 255;
+            if <VotedOption<T>>::exists((&reference_index, &sender)){
+              voted_option = <VotedOption<T>>::get((&reference_index, &sender));
+            }
+
+            // if an option is already registered
+            if voted_option != 255 {
+              ensure!(voted_option != option, "Provided option is already registered."); 
+              
+              // remove sender from accounts
+              let mut prev_accounts = <AccountsByOption<T>>::get((&reference_index, &voted_option));
+              let i = prev_accounts.iter().position(|x| x == &sender).unwrap() as usize;
+              prev_accounts.remove(i);
+              <AccountsByOption<T>>::insert((&reference_index, voted_option), prev_accounts);
+              <VotedOption<T>>::remove((&reference_index, &sender));
+              print("Ballot updated with new option!");
+            } 
+
+            accounts.push(sender.clone());
+            <AccountsByOption<T>>::insert((&reference_index, &option), accounts);
+            <VotedOption<T>>::insert((reference_index, &sender), option);
+
+            print("Ballot Casted!");
             Ok(())
         }
 
