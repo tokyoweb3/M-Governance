@@ -8,7 +8,7 @@ use support::{
 use runtime_io::{TestExternalities};
 use primitives::{H256};
 use sr_primitives::{
-    Perbill, traits::{IdentityLookup},
+    Perbill, traits::{Hash, IdentityLookup},
     testing::{Header}
 };
 
@@ -184,8 +184,9 @@ fn account_should_be_registered() {
         let ca_hash = sr_primitives::traits::BlakeTwo256::hash(&[111, 112, 113, 114]);
         let cert = sr_primitives::traits::BlakeTwo256::hash(&[221, 222, 223, 224]);
         let signature = sr_primitives::traits::BlakeTwo256::hash(&[11, 12, 13, 14]);
+        let data = [11, 12, 13, 14].to_vec();
         // new ca at index 1
-        assert_ok!(Certificate::register_ca(Origin::signed(1), ca_hash));
+        assert_ok!(Certificate::register_ca(Origin::signed(1), ca_hash, data));
 
         assert_ok!(Governance::create_vote(Origin::signed(10), 0, 10, [00].to_vec(), 0, [[00].to_vec()].to_vec()));
         // requires ca at 1

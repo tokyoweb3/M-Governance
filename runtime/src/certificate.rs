@@ -38,14 +38,17 @@ decl_storage! {
         CAHashCount get(cahash_count): u64;
         pub CAHashByIndex get(cahash_by_index): map u64 => T::Hash;
         IndexByCAHash get(index_by_cahash): map T::Hash => u64;
-        CAHashes get(cahashes): map u8 => Vec<T::Hash>;
+        CAHashes get(cahashes): Vec<T::Hash>;
+
+        CADataByIndex get(ca_data_by_index): map u64 => Vec<u8>;
+        CAData get(ca_data): Vec<Vec<u8>>;
 
         AccountsByCAHash get(accounts_by_cahash): map T::Hash => Vec<T::AccountId>;
         CAHashesByAccount get(cahashes_by_account): map T::AccountId => Vec<T::Hash>;
 
         CertificateStore get(certificate_store): map (T::AccountId, T::Hash) => Certification<T::Hash>;
         // used for checking if any duplicate exists.
-        CertHashes get(cert_hashes): map u8 => Vec<T::Hash>;
+        CertHashes get(cert_hashes): Vec<T::Hash>;
     }
 }
 
@@ -56,7 +59,7 @@ decl_module! {
         // register new ca. Takes CAHash
         // checks:
         //  - Hash doesn't exist
-        pub fn register_ca(origin, ca_hash: T::Hash) -> Result{
+        pub fn register_ca(origin, ca_hash: T::Hash, data: Vec<u8>) -> Result{
             let _sender = ensure_signed(origin)?;
             let new_count: u64 = Self::cahash_count().checked_add(1)
                 .ok_or("Overflow adding CAHash count.")?;
@@ -64,15 +67,21 @@ decl_module! {
             // Hash should be unique
             ensure!(!<IndexByCAHash<T>>::exists(&ca_hash), "Provided CAHash is already registered.");
             ensure!(!<CAHashByIndex<T>>::exists(&new_count), "Error: Overlapping count exists.");
-            
-            let mut new_hashes = Self::cahashes(0);
+            ensure!(!<CADataByIndex>::exists(&new_count), "Provided CA is already registered.");
+
+            let mut new_hashes = Self::cahashes();
             new_hashes.push(ca_hash);
 
             <CAHashByIndex<T>>::insert(new_count, ca_hash);
             <IndexByCAHash<T>>::insert(ca_hash, new_count);
 
-            <CAHashes<T>>::remove(0);
-            <CAHashes<T>>::insert(0, new_hashes);
+            <CAHashes<T>>::put(new_hashes);
+
+            <CADataByIndex>::insert(new_count, &data);
+
+            let mut ca_data_arr = Self::ca_data();
+            ca_data_arr.push(data);
+            <CAData>::put(ca_data_arr);
 
             <CAHashCount>::put(new_count);
             print("New CA has been successly registered!");
@@ -91,7 +100,7 @@ decl_module! {
 
             let mut accounts = <AccountsByCAHash<T>>::get(&ca_hash);
             let mut hashes = <CAHashesByAccount<T>>::get(&sender);
-            let mut certs = Self::cert_hashes(0);
+            let mut certs = Self::cert_hashes();
             // a
             ensure!(<IndexByCAHash<T>>::exists(ca_hash), "Provided CAHash doesn't exist.");
             // b
@@ -117,8 +126,7 @@ decl_module! {
             <CAHashesByAccount<T>>::insert(&sender, hashes);
 
             certs.push(cert);
-            <CertHashes<T>>::remove(0);
-            <CertHashes<T>>::insert(0, certs);
+            <CertHashes<T>>::put(certs);
 
             <CertificateStore<T>>::insert((&sender, ca_hash), certificate);
             print("Account successfully registered!");
@@ -215,11 +223,12 @@ mod tests {
     fn can_register_ca() {
       TestExternalities::default().execute_with(||{
         let CAHash = sr_primitives::traits::BlakeTwo256::hash(&[111, 112, 113, 114]);
-        
+        let data = [11, 12, 13, 14].to_vec();
+
         assert_eq!(Certificate::cahash_count(), 0);
 
         // register new ca
-        assert_ok!(Certificate::register_ca(Origin::signed(1), CAHash));
+        assert_ok!(Certificate::register_ca(Origin::signed(1), CAHash, data.clone()));
         
         // respective storage changes
         assert_eq!(Certificate::cahash_count(), 1);
@@ -227,7 +236,7 @@ mod tests {
         assert_eq!(Certificate::index_by_cahash(CAHash), 1);
 
         // cannot register same CAhash
-        assert_noop!(Certificate::register_ca(Origin::signed(1), CAHash), "Provided CAHash is already registered.");
+        assert_noop!(Certificate::register_ca(Origin::signed(1), CAHash, data), "Provided CAHash is already registered.");
       });
     }
 
@@ -241,10 +250,11 @@ mod tests {
           cert,
           signature,
         };
+        let data = [11, 12, 13, 14].to_vec();
 
         // cannot register for non-existing CA
         assert_noop!(Certificate::register_account(Origin::signed(1), CAHash, cert, signature), "Provided CAHash doesn't exist.");
-        assert_ok!(Certificate::register_ca(Origin::signed(1), CAHash));
+        assert_ok!(Certificate::register_ca(Origin::signed(1), CAHash, data));
         assert_ok!(Certificate::register_account(Origin::signed(1), CAHash, cert, signature));
 
         // respective storage changes

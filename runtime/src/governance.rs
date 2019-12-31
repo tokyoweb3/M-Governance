@@ -9,7 +9,7 @@ use support::{
 use system::ensure_signed;
 use codec::{Encode, Decode};
 use rstd::prelude::Vec;
-use sr_primitives::traits::{Hash, CheckedAdd, SaturatedConversion};
+use sr_primitives::traits::{CheckedAdd, SaturatedConversion};
 mod tests;
 
 // Option: {title: String, pot: u64, voters: <Vec:T::AccountId>}
@@ -79,7 +79,7 @@ decl_storage! {
         VoteByCreatorArray get(created_by_and_index): map (T::AccountId, u64) => Vote<T::AccountId, T::BlockNumber, T::Hash>;
 
         VoteResults: map u64 => Vec<u64>;
-        VoteIndexHash get(index_hash): map u64 => T::Hash;
+        Data get(data): map u64 => Vec<u8>;
 
         // VotedAccounts:[aye:[AccountId], nay:[AccountId],....]
         VotedAccounts: map (ReferenceIndex, u8) => Vec<T::AccountId>;
@@ -99,7 +99,7 @@ decl_module! {
         // Creator Modules
         // Create a new vote
         // TODO: Takes expiring time, title as data: Vec, voting_type
-        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber ,data: Vec<u8>, cert_index: u64, options: Vec<Vec<u8>>) -> Result {
+        pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber, data: Vec<u8>, cert_index: u64, options: Vec<Vec<u8>>) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
 
@@ -111,7 +111,6 @@ decl_module! {
             let now = <system::Module<T>>::block_number();
             // check if resolved if now > vote_exp
             let vote_exp = now.checked_add(&exp_length.into()).ok_or("Overflow when setting application expiry.")?;
-            let hashed = <T as system::Trait>::Hashing::hash(&data);
 
             let ca_hash:T::Hash;
             if cert_index != 0 {
@@ -140,7 +139,7 @@ decl_module! {
             <VoteOptions>::insert(new_vote_num, options);
 
             Self::mint_vote(sender, new_vote, vote_count_by_sender, new_vote_num)?;
-            <VoteIndexHash<T>>::insert(new_vote_num, hashed);
+            <Data>::insert(new_vote_num, data);
             Ok(())
         }
 
