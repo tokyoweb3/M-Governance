@@ -46,9 +46,14 @@ decl_storage! {
         AccountsByCAHash get(accounts_by_cahash): map T::Hash => Vec<T::AccountId>;
         CAHashesByAccount get(cahashes_by_account): map T::AccountId => Vec<T::Hash>;
 
+        // Certificate registry tied to account
         CertificateStore get(certificate_store): map (T::AccountId, T::Hash) => Certification<T::Hash>;
-        // used for checking if any duplicate exists.
+
+        // Array of certhashes used for checking if any duplicate exists.
         CertHashes get(cert_hashes): Vec<T::Hash>;
+
+        // Raw Certificate in hex
+        CAStore get(ca_store): map u64 => Vec<u8>;
     }
 }
 
@@ -59,7 +64,7 @@ decl_module! {
         // register new ca. Takes CAHash
         // checks:
         //  - Hash doesn't exist
-        pub fn register_ca(origin, ca_hash: T::Hash, data: Vec<u8>) -> Result{
+        pub fn register_ca(origin, ca_hash: T::Hash, ca_raw: Vec<u8>, data: Vec<u8>) -> Result{
             let _sender = ensure_signed(origin)?;
             let new_count: u64 = Self::cahash_count().checked_add(1)
                 .ok_or("Overflow adding CAHash count.")?;
@@ -69,6 +74,7 @@ decl_module! {
             ensure!(!<CAHashByIndex<T>>::exists(&new_count), "Error: Overlapping count exists.");
             ensure!(!<CADataByIndex>::exists(&new_count), "Provided CA is already registered.");
 
+            // ca hash
             let mut new_hashes = Self::cahashes();
             new_hashes.push(ca_hash);
 
@@ -77,6 +83,10 @@ decl_module! {
 
             <CAHashes<T>>::put(new_hashes);
 
+            // raw ca
+            <CAStore>::insert(new_count, ca_raw);
+
+            // data
             <CADataByIndex>::insert(new_count, &data);
 
             let mut ca_data_arr = Self::ca_data();
