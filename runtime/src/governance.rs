@@ -102,7 +102,8 @@ decl_module! {
         pub fn create_vote(origin, vote_type:u8, exp_length: T::BlockNumber, data: Vec<u8>, cert_index: u64, options: Vec<Vec<u8>>) -> Result {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
-
+            ensure!(vote_type < 3, "Unknown voteType was provided.");
+            ensure!(vote_type >= 0, "Unknown voteType was provided.");
             let new_vote_num = <AllVoteCount>::get().checked_add(1)
                 .ok_or("Overflow adding vote count")?;
             let vote_count_by_sender = <CreatedVoteCount<T>>::get(sender.clone()).checked_add(1)
