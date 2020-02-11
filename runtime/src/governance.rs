@@ -20,7 +20,7 @@ mod tests;
 pub struct Vote<AccountId, BlockNumber, Hash> {
     id: u64,
     vote_type: u8,
-    approved: Hash, // Index for required certificate. 0 means no certificate is required. 
+    approved: Hash, // Index for required certificate. 0 means no certificate is required.
     creator: AccountId,
     when: BlockNumber,
     vote_ends: BlockNumber,
@@ -103,7 +103,6 @@ decl_module! {
             let sender = ensure_signed(origin)?;
             ensure!(data.len() <= 256, "listing data cannot be more than 256 bytes");
             ensure!(vote_type < 3, "Unknown voteType was provided.");
-            ensure!(vote_type >= 0, "Unknown voteType was provided.");
             let new_vote_num = <AllVoteCount>::get().checked_add(1)
                 .ok_or("Overflow adding vote count")?;
             let vote_count_by_sender = <CreatedVoteCount<T>>::get(sender.clone()).checked_add(1)
@@ -144,7 +143,7 @@ decl_module! {
             Ok(())
         }
 
-        fn cast_lockvote(origin, reference_index: ReferenceIndex, ballot: Ballot, deposit: BalanceOf<T>, duration: T::BlockNumber) -> Result {
+        fn cast_lockvote(origin, reference_index: ReferenceIndex, option:u8, deposit: BalanceOf<T>, duration: T::BlockNumber) -> Result {
             let sender = ensure_signed(origin)?;
             let vote = Self::votes(&reference_index);
             let now = <system::Module<T>>::block_number();
@@ -159,7 +158,7 @@ decl_module! {
             ensure!(vote.creator != sender, "You cannot vote your own vote.");
             ensure!(vote.vote_ends > now, "This vote has already been expired.");
             ensure!(vote.vote_type == 1, "This vote is not LockVote.");
-            
+
             if vote.approved != T::Hash::default() {
               // fails is the sender's account is not registered for CAHash.
                 certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
@@ -178,7 +177,38 @@ decl_module! {
                 until.saturated_into::<T::BlockNumber>(),   // use withdraw function
                 WithdrawReasons::except(WithdrawReason::TransactionPayment),
             );
-            Self::cast_ballot_f(sender, reference_index, ballot)?; // includes checks
+
+            Self::cast_ballot(sender, reference_index, option)?;
+
+            // check if the option is in a valid range
+            // let options = <VoteOptions>::get(reference_index); // => Vec<Vec<u8>>
+            // ensure!(option <= options.len() as u8, "Provided option out of range.");
+
+            // let mut accounts = <AccountsByOption<T>>::get((&reference_index, &option));
+            // let mut voted_option:u8 = 255;
+            // if <VotedOption<T>>::exists((&reference_index, &sender)){
+            //   voted_option = <VotedOption<T>>::get((&reference_index, &sender));
+            // }
+
+            // // if an option is already registered
+            // if voted_option != 255 {
+            //   ensure!(voted_option != option, "Provided option is already registered.");
+
+            //   // remove sender from accounts
+            //   let mut prev_accounts = <AccountsByOption<T>>::get((&reference_index, &voted_option));
+            //   let i = prev_accounts.iter().position(|x| x == &sender).unwrap() as usize;
+            //   prev_accounts.remove(i);
+            //   <AccountsByOption<T>>::insert((&reference_index, voted_option), prev_accounts);
+            //   <VotedOption<T>>::remove((&reference_index, &sender));
+            //   print("Ballot updated with new option!");
+            // }
+
+            // accounts.push(sender.clone());
+            // <AccountsByOption<T>>::insert((&reference_index, &option), accounts);
+            // <VotedOption<T>>::insert((reference_index, &sender), option);
+
+            // print("Ballot Casted!");
+            // Self::cast_ballot_f(sender, reference_index, ballot)?; // includes checks
             Ok(())
         }
 
@@ -186,7 +216,7 @@ decl_module! {
         // Takes reference_index and sender accountId
         // checks:
             // a: if the vote exists and type is 1
-            // b: the vote has concluded. Cannot tally if withdrawn before conclusion 
+            // b: the vote has concluded. Cannot tally if withdrawn before conclusion
             // b: ensure sender has locked the vote
             // c: ensure the lock period is over
         fn withdraw(origin, reference_index: ReferenceIndex) -> Result {
@@ -204,7 +234,7 @@ decl_module! {
             <LockBalance<T>>::remove((&reference_index, &sender));
             print("Locked token is withdrawn!");
             Self::deposit_event(RawEvent::Withdrew(sender, reference_index));
-    
+
             Ok(())
         }
         // Voter modules
@@ -212,51 +242,51 @@ decl_module! {
             // a. the vote exists
             // b. vote hasnt expired
             // c. the voter hasnt voted yet in the same option. If voted in different option, change the vote.
-        fn cast_ballot(origin, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
-            let sender = ensure_signed(origin)?;
-            let vote = <VotesByIndex<T>>::get(&reference_index);
-            let now = <system::Module<T>>::block_number();
-            ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
-            ensure!(vote.creator != sender, "You cannot vote your own vote.");
-            ensure!(vote.vote_ends > now, "This vote has already been expired.");
-            ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
+        // fn cast_ballot(origin, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
+        //     let sender = ensure_signed(origin)?;
+        //     let vote = <VotesByIndex<T>>::get(&reference_index);
+        //     let now = <system::Module<T>>::block_number();
+        //     ensure!(<VotesByIndex<T>>::exists(&reference_index), "Vote doesn't exists");
+        //     ensure!(vote.creator != sender, "You cannot vote your own vote.");
+        //     ensure!(vote.vote_ends > now, "This vote has already been expired.");
+        //     ensure!(vote.vote_type == 0, "This vote is LockVote. Use 'cast_lockvote' instead!");
 
-            if vote.approved != T::Hash::default() {
-              // fails is the sender's account is not registered for CAHash.
-                certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
-            }
-            let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
-            let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
-            // keep track of voter's id in aye or nay vector in Vote
-            // Voter can change his vote b/w aye and nay
-            // Voter cannot vote twice
-            match ballot {
-                Ballot::Aye => {
-                    ensure!(!accounts_aye.contains(&sender), "You have already voted aye.");
-                    // if sender has voted for the other option, remove from the array
-                    if accounts_nay.contains(&sender) {
-                        let i = accounts_nay.iter().position(|x| x == &sender).unwrap() as usize;
-                        accounts_nay.remove(i);
-                    } 
-                    accounts_aye.push(sender.clone());
-                    print("Ballot casted Aye!");
-                }
-                Ballot::Nay => {
-                    ensure!(!accounts_nay.contains(&sender), "You have already voted nay.");
-                    if accounts_aye.contains(&sender) {
-                        let i = accounts_aye.iter().position(|x| x == &sender).unwrap() as usize;
-                        accounts_aye.remove(i);
-                    } 
-                    accounts_nay.push(sender.clone());
-                    print("Ballot casted Nay!");
-                }
-            }
+        //     if vote.approved != T::Hash::default() {
+        //       // fails is the sender's account is not registered for CAHash.
+        //         certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
+        //     }
+        //     let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
+        //     let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
+        //     // keep track of voter's id in aye or nay vector in Vote
+        //     // Voter can change his vote b/w aye and nay
+        //     // Voter cannot vote twice
+        //     match ballot {
+        //         Ballot::Aye => {
+        //             ensure!(!accounts_aye.contains(&sender), "You have already voted aye.");
+        //             // if sender has voted for the other option, remove from the array
+        //             if accounts_nay.contains(&sender) {
+        //                 let i = accounts_nay.iter().position(|x| x == &sender).unwrap() as usize;
+        //                 accounts_nay.remove(i);
+        //             }
+        //             accounts_aye.push(sender.clone());
+        //             print("Ballot casted Aye!");
+        //         }
+        //         Ballot::Nay => {
+        //             ensure!(!accounts_nay.contains(&sender), "You have already voted nay.");
+        //             if accounts_aye.contains(&sender) {
+        //                 let i = accounts_aye.iter().position(|x| x == &sender).unwrap() as usize;
+        //                 accounts_aye.remove(i);
+        //             }
+        //             accounts_nay.push(sender.clone());
+        //             print("Ballot casted Nay!");
+        //         }
+        //     }
 
-            <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
-            <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
-            Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
-            Ok(())
-        }
+        //     <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
+        //     <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
+        //     Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
+        //     Ok(())
+        // }
 
         fn cast_ballot_with_options(origin, reference_index: ReferenceIndex, option: u8) -> Result {
             let sender = ensure_signed(origin)?;
@@ -271,35 +301,36 @@ decl_module! {
               // fails is the sender's account is not registered for CAHash.
                 certificate::Module::<T>::check_account(sender.clone(), vote.approved)?;
             }
+            Self::cast_ballot(sender, reference_index, option)?;
 
-            // check if the option is in a valid range
-            let options = <VoteOptions>::get(reference_index); // => Vec<Vec<u8>>
-            ensure!(option <= options.len() as u8, "Provided option out of range.");
+            // // check if the option is in a valid range
+            // let options = <VoteOptions>::get(reference_index); // => Vec<Vec<u8>>
+            // ensure!(option <= options.len() as u8, "Provided option out of range.");
 
-            let mut accounts = <AccountsByOption<T>>::get((&reference_index, &option));
-            let mut voted_option:u8 = 255;
-            if <VotedOption<T>>::exists((&reference_index, &sender)){
-              voted_option = <VotedOption<T>>::get((&reference_index, &sender));
-            }
+            // let mut accounts = <AccountsByOption<T>>::get((&reference_index, &option));
+            // let mut voted_option:u8 = 255;
+            // if <VotedOption<T>>::exists((&reference_index, &sender)){
+            //   voted_option = <VotedOption<T>>::get((&reference_index, &sender));
+            // }
 
-            // if an option is already registered
-            if voted_option != 255 {
-              ensure!(voted_option != option, "Provided option is already registered."); 
-              
-              // remove sender from accounts
-              let mut prev_accounts = <AccountsByOption<T>>::get((&reference_index, &voted_option));
-              let i = prev_accounts.iter().position(|x| x == &sender).unwrap() as usize;
-              prev_accounts.remove(i);
-              <AccountsByOption<T>>::insert((&reference_index, voted_option), prev_accounts);
-              <VotedOption<T>>::remove((&reference_index, &sender));
-              print("Ballot updated with new option!");
-            } 
+            // // if an option is already registered
+            // if voted_option != 255 {
+            //   ensure!(voted_option != option, "Provided option is already registered.");
 
-            accounts.push(sender.clone());
-            <AccountsByOption<T>>::insert((&reference_index, &option), accounts);
-            <VotedOption<T>>::insert((reference_index, &sender), option);
+            //   // remove sender from accounts
+            //   let mut prev_accounts = <AccountsByOption<T>>::get((&reference_index, &voted_option));
+            //   let i = prev_accounts.iter().position(|x| x == &sender).unwrap() as usize;
+            //   prev_accounts.remove(i);
+            //   <AccountsByOption<T>>::insert((&reference_index, voted_option), prev_accounts);
+            //   <VotedOption<T>>::remove((&reference_index, &sender));
+            //   print("Ballot updated with new option!");
+            // }
 
-            print("Ballot Casted!");
+            // accounts.push(sender.clone());
+            // <AccountsByOption<T>>::insert((&reference_index, &option), accounts);
+            // <VotedOption<T>>::insert((reference_index, &sender), option);
+
+            // print("Ballot Casted!");
             Ok(())
         }
 
@@ -324,38 +355,36 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-    // keep track of accounts in array by Aye/Nay in <VotedAccounts<T>>
     // TODO: lockvote_tally should check <LockBalance> for accuracy
-    fn cast_ballot_f(sender: T::AccountId, reference_index: ReferenceIndex, ballot: Ballot) -> Result {
-        let mut accounts_aye = <VotedAccounts<T>>::get((reference_index, 0));
-        let mut accounts_nay = <VotedAccounts<T>>::get((reference_index, 1));
-        // keep track of voter's id in aye or nay vector in Vote
-        // Voter can change his vote b/w aye and nay
-        // Voter cannot vote twice
-        match ballot {
-            Ballot::Aye => {
-                ensure!(!accounts_aye.contains(&sender), "You have already voted aye.");
-                // if sender has voted for the other option, remove from the array
-                if accounts_nay.contains(&sender) {
-                    let i = accounts_nay.iter().position(|x| x == &sender).unwrap() as usize;
-                    accounts_nay.remove(i);
-                } 
-                accounts_aye.push(sender.clone());
-                <VotedAccounts<T>>::insert((reference_index, 0), accounts_aye);
-                print("Ballot casted Aye!");
-            }
-            Ballot::Nay => {
-                ensure!(!accounts_nay.contains(&sender), "You have already voted nay.");
-                if accounts_aye.contains(&sender) {
-                    let i = accounts_aye.iter().position(|x| x == &sender).unwrap() as usize;
-                    accounts_aye.remove(i);
-                } 
-                accounts_nay.push(sender.clone());
-                <VotedAccounts<T>>::insert((reference_index, 1), accounts_nay);
-                print("Ballot casted Nay!");
-            }
+    fn cast_ballot(sender: T::AccountId, reference_index: ReferenceIndex, option: u8) -> Result {
+        // check if the option is in a valid range
+        let options = <VoteOptions>::get(reference_index); // => Vec<Vec<u8>>
+        ensure!(option <= options.len() as u8, "Provided option out of range.");
+
+        let mut accounts = <AccountsByOption<T>>::get((&reference_index, &option));
+        let mut voted_option:u8 = 255;
+        if <VotedOption<T>>::exists((&reference_index, &sender)){
+          voted_option = <VotedOption<T>>::get((&reference_index, &sender));
         }
-        Self::deposit_event(RawEvent::Voted(sender, reference_index, ballot));
+
+        // if an option is already registered
+        if voted_option != 255 {
+          ensure!(voted_option != option, "Provided option is already registered.");
+
+          // remove sender from accounts
+          let mut prev_accounts = <AccountsByOption<T>>::get((&reference_index, &voted_option));
+          let i = prev_accounts.iter().position(|x| x == &sender).unwrap() as usize;
+          prev_accounts.remove(i);
+          <AccountsByOption<T>>::insert((&reference_index, voted_option), prev_accounts);
+          <VotedOption<T>>::remove((&reference_index, &sender));
+          print("Ballot updated with new option!");
+        }
+
+        accounts.push(sender.clone());
+        <AccountsByOption<T>>::insert((&reference_index, &option), accounts);
+        <VotedOption<T>>::insert((reference_index, &sender), option);
+
+        print("Ballot Casted!");
         Ok(())
     }
     fn mint_vote(sender: T::AccountId, new_vote: Vote<T::AccountId, T::BlockNumber, T::Hash>, vote_count_by_sender: u64, new_vote_num: u64 ) -> Result{
